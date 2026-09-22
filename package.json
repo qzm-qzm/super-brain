@@ -1,0 +1,68 @@
+{
+  "name": "super-brain",
+  "productName": "超强大脑",
+  "version": "0.1.0",
+  "private": true,
+  "description": "快捷键随时呼出的本地备忘录与加密密码库",
+  "author": "qzm-qzm",
+  "main": "src/main.cjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qzm-qzm/super-brain.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "check": "node scripts/check.cjs",
+    "build": "electron-builder --win nsis portable --x64 --publish never",
+    "build:dir": "electron-builder --win --x64 --dir --publish never",
+    "test:desktop": "node scripts/smoke.cjs"
+  },
+  "devDependencies": {
+    "electron": "44.4.3",
+    "electron-builder": "26.15.3",
+    "playwright": "1.62.1"
+  },
+  "build": {
+    "appId": "io.github.qzm-qzm.super-brain",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**/*",
+      "assets/icon.png",
+      "assets/icon.ico",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "超强大脑",
+      "artifactName": "SuperBrain-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "SuperBrain-Portable-${version}-${arch}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "qzm-qzm",
+      "repo": "super-brain"
+    }
+  }
+}

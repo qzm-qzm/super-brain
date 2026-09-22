@@ -1,0 +1,169 @@
+name: Windows checks and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: Check and build Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Check version and release tag
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          $lockVersion = (Get-Content -LiteralPath package-lock.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Use a stable x.y.z package version.' }
+          if ($lockVersion -ne $version) { throw 'package.json and package-lock.json versions must match.' }
+          if ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -ne "v$version") {
+            throw "Tag $env:REF_NAME must match package version v$version."
+          }
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Ensure Electron runtime is installed
+        run: node node_modules/electron/install.js
+
+      - name: Check JavaScript syntax
+        run: npm run check
+
+      - name: Test storage and password vault
+        run: npm test
+
+      - name: Test the real Electron desktop application
+        id: desktop
+        run: npm run test:desktop
+
+      - name: Save desktop test failure details
+        if: failure() && steps.desktop.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: SuperBrain-desktop-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/desktop-smoke-*/result.json
+            test-results/desktop-smoke-*/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Build installer and portable application
+        if: github.event_name != 'pull_request'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run build
+
+      - name: Prepare downloads and SHA-256 checksums
+        if: github.event_name != 'pull_request'
+        env:
+          APP_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $names = @("SuperBrain-Setup-$env:APP_VERSION-x64.exe", "SuperBrain-Portable-$env:APP_VERSION-x64.exe")
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          $checksums = foreach ($name in $names) {
+            $source = Join-Path dist $name
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing release asset: $name" }
+            Copy-Item -LiteralPath $source -Destination (Join-Path release-assets $name)
+            $hash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $name"
+          }
+          $checksums | Set-Content -LiteralPath release-assets/SHA256SUMS.txt -Encoding utf8NoBOM
+          $notes = @"
+          超强大脑 $env:APP_VERSION · Windows x64
+
+          - 日常使用请下载 SuperBrain-Setup-$env:APP_VERSION-x64.exe；免安装体验请下载 Portable 版本。
+          - 默认快捷键 Alt+Q，可在设置中修改；安装版可启用开机启动。
+          - 更新前可导出备份，退出软件后覆盖安装。资料保存在 %APPDATA%/SuperBrain。
+          - 本版本未做 Windows 代码签名，系统可能显示未知发布者提示。SHA256SUMS.txt 可用于核对下载完整性。
+          - 普通备忘录明文保存在本机；密码库及备份中的密码字段加密保存。主密码遗失后无法找回。
+
+          使用与更新说明：https://github.com/qzm-qzm/super-brain#readme
+          "@
+          $notes | Set-Content -LiteralPath release-assets/RELEASE-NOTES.md -Encoding utf8NoBOM
+
+      - name: Save downloadable Windows build
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: SuperBrain-${{ steps.version.outputs.value }}-windows-x64
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download checked release files
+        uses: actions/download-artifact@v8
+        with:
+          pattern: SuperBrain-*-windows-x64
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish installer, portable application and checksums
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid release version.' }
+          $assets = @(
+            "release-assets/SuperBrain-Setup-$version-x64.exe",
+            "release-assets/SuperBrain-Portable-$version-x64.exe",
+            'release-assets/SHA256SUMS.txt'
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "Missing asset: $asset" }
+          }
+          # Create as a draft so a failed upload never exposes a partial release.
+          $existing = gh release view $env:RELEASE_TAG --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if (-not ($existing | ConvertFrom-Json).isDraft) {
+              throw 'This version is already published. Create a new version instead of replacing it.'
+            }
+            gh release upload $env:RELEASE_TAG @assets --clobber
+          } else {
+            gh release create $env:RELEASE_TAG @assets --draft --verify-tag --title "超强大脑 $env:RELEASE_TAG" --notes-file release-assets/RELEASE-NOTES.md --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset upload failed.' }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
