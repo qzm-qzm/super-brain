@@ -42,7 +42,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
-          $lockVersion = (Get-Content -LiteralPath package-lock.json -Raw | ConvertFrom-Json).version
+          $lockVersion = (Get-Content -LiteralPath package-lock.json -Raw | ConvertFrom-Json -AsHashtable).version
           if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Use a stable x.y.z package version.' }
           if ($lockVersion -ne $version) { throw 'package.json and package-lock.json versions must match.' }
           if ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -ne "v$version") {
