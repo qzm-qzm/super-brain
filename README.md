@@ -1,73 +1,71 @@
-# 超强大脑
+# 超强大脑 · 轻量版
 
-一个用快捷键随时呼出的 Windows 备忘录小窗。普通记录一条条编辑，账号密码放进独立的本地加密密码库；背景、配色和图片透明度都可以自己调整。
+双击即用的 Windows 备忘录小工具。默认按 **F8** 呼出或收起小窗，配置、备忘录和加密密码库放在运行文件旁边的 `data` 文件夹。
 
-[下载最新版本](https://github.com/qzm-qzm/super-brain/releases/latest) · [使用说明](docs/使用说明.md) · [更新与发布](docs/更新与发布.md) · [数据与安全](docs/数据与安全.md) · [版本记录](CHANGELOG.md)
+[下载最新版本](https://github.com/qzm-qzm/super-brain/releases/latest) · [使用说明](docs/使用说明.md) · [更新与发布](docs/更新与发布.md) · [数据与安全](docs/数据与安全.md)
 
-![超强大脑桌面软件](docs/preview.png)
+![超强大脑轻量版](docs/preview.png)
 
-## 开始使用
+## 直接运行
 
-1. 在 Releases 页面下载 `SuperBrain-Setup-版本号-x64.exe`，完成安装。
-2. 打开「超强大脑」，按 **Alt + Q** 呼出或收起。可以在设置中改为 `F8` 等快捷键，并启用开机启动。
-3. 在「备忘录」中新建记录，修改后自动保存。需要存密码时，切换「账号密码」，先创建主密码。
-4. 点击右上角调色盘，选择主题、自定义颜色或上传背景图片，拖动滑块调整图片透明度。
+1. 下载 `SuperBrain-Lite-0.2.0-win-x64.zip`，解压到可写文件夹，例如 `D:\super-brain`。
+2. 双击 **超强大脑.exe**。无需安装，不需要 Node.js、Electron、浏览器或管理员权限。
+3. 按 **F8** 随时呼出和收起。关闭按钮收起到托盘；彻底退出请使用「设置 → 退出工具」或托盘菜单。
+4. 外观按钮可调整配色、背景图片和 **0–100% 图片透明度**。
 
-也提供 `SuperBrain-Portable-版本号-x64.exe` 免安装版。两个版本都把资料放在当前 Windows 用户的 `%APPDATA%/SuperBrain` 中；免安装版不会把资料自动放到 U 盘，也暂不支持开机启动。
+也可以直接下载单独的 `SuperBrain.exe`，放进文件夹后运行。该文件和压缩包内的 `超强大脑.exe` 内容一致。首次运行会创建 `data`，移动时请把运行文件和 `data` 一起带走。
 
-当前发布 Windows x64 版本，建议在 Windows 11 使用。安装包尚未做 Windows 代码签名，系统可能提示「未知发布者」。发布页附带 `SHA256SUMS.txt`，用于核对下载文件完整性；它不能代替代码签名。
+运行文件约 **96 KB**，依赖 Windows 自带的 **.NET Framework 4.8 或更高版本**，面向 Windows 10/11 x64。没有捆绑浏览器运行环境。此体积指下载的运行文件，不代表进程内存占用。
 
-## 已有功能
+## 功能
 
-| 使用场景 | 功能 |
-| --- | --- |
-| 随时记录 | 可自定义的全局快捷键、托盘入口、小窗拖动与调整大小、可选始终置顶 |
-| 普通备忘录 | 新建、编辑、搜索、置顶、删除和短时撤销，自动保存 |
-| 账号密码 | 主密码解锁、账号/密码/网站/备注、显示或隐藏密码、一键复制、生成随机密码 |
-| 自动锁定 | 收起窗口、锁屏、休眠时锁定；闲置锁定时间可选，默认 5 分钟 |
-| 个性外观 | 6 种配色、自定义背景色与主题色、本地背景图片、0%–100% 图片透明度 |
-| 备份与更新 | 导出和恢复备份、修改主密码、手动检查 GitHub 新版本 |
+- 全局快捷键、托盘入口、窗口缩放、可选置顶；重复双击打开现有窗口。
+- 备忘录新建、编辑、搜索、置顶、删除，删除后 10 秒内 `Ctrl+Z` 撤销。
+- 独立加密密码库：主密码、账号/密码/网站/备注、显示与隐藏密码、复制、随机密码。
+- 收起窗口、锁屏、休眠和闲置后锁定；锁定前已接受的修改保留。
+- 六种主题、自定义背景色和主题色、本地背景图片、图片透明度。
+- 本地备份与恢复、修改主密码、打开新版本下载页。
 
-**普通备忘录是明文；账号密码加密保存。主密码没有找回或重置解密功能。** 密码和私密备注请放在「账号密码」中，具体边界见[数据与安全](docs/数据与安全.md)。
+**普通备忘录为明文，账号密码加密保存。主密码不能找回。** 数据不上传 GitHub，只有主动打开下载页或仓库时使用浏览器访问网络。
 
-## GitHub 托管什么
+## 本地文件
 
-仓库保存软件代码，GitHub Actions 负责检查和构建，Releases 保存 Windows 安装包及版本记录。你的备忘录、密码和背景图片留在本机，不会因为使用这个仓库而上传到 GitHub。
-
-本项目是桌面软件，没有网页版、账号系统或云同步。平常记录、查询和备份可离线使用；主动点击「检查更新」时才会访问 GitHub 的最新版本接口，打开仓库或下载页面也会使用网络。
-
-## 开发与构建
-
-使用 Windows、Node.js 24 和 Git。首次运行：
-
-```powershell
-git clone https://github.com/qzm-qzm/super-brain.git
-cd super-brain
-npm ci
-node node_modules/electron/install.js
-npm run check
-npm test
-npm run test:desktop
-npm start
+```text
+超强大脑.exe
+使用说明.txt
+data/                    # 首次运行自动创建
+  config.json            # 配色、图片、快捷键等
+  notes.json             # 普通备忘录
+  vault.enc.json         # 加密密码库，首次创建后生成
+  *.bak                  # 上一版数据
+  before-restore-*.json   # 恢复备份前保存的资料
 ```
 
-生成安装包和免安装包：
+资料不再存放到 C 盘 AppData。软件没有安装器、不自动注册开机启动，也不会修改 Windows 全局设置。若快捷键被占用，在设置中换一个即可。
+
+## 构建与测试
+
+源码为 C# / WPF，使用系统随 .NET Framework 提供的编译器。无需下载依赖；从 Windows PowerShell 7 / GitHub Actions 运行：
 
 ```powershell
-npm run build
+./scripts/build-lite.ps1
+./scripts/build-lite.ps1 -Tests
+./dist-lite/NativeTests.exe ./test-results/native
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/smoke-lite.ps1 -Executable ./dist-lite/超强大脑.exe -TestRoot ./test-results/standalone
 ```
 
-产物在 `dist/`。依赖由 `package-lock.json` 固定，Electron 运行时显式安装步骤也用于处理 npm 未运行依赖安装脚本的环境。`npm run test:desktop` 使用 Playwright 启动真实 Electron，以独立测试目录和虚构记录检查界面、进程通信、保存及重启恢复，无需另行下载 Playwright 浏览器。开发时运行 `npm start` 默认使用同一个 Windows 用户数据目录；调试请使用独立测试目录，方法见[使用说明](docs/使用说明.md#开发时隔离测试资料)。
+编译器默认位置为 `%WINDIR%/Microsoft.NET/Framework64/v4.0.30319/csc.exe`。测试仅使用指定的独立目录，覆盖密码派生参考向量、密文篡改、保存恢复、真实 WPF 窗口、快捷键和最终运行文件。
 
-## 后续如何更新
+## 更新
 
-功能修改完成、检查通过后，在干净的 `main` 分支上运行：
+退出工具后替换 `超强大脑.exe`，**保留 `data` 文件夹**。建议更新前从设置导出备份。当前通过下载页手动更新，不自动下载安装。
 
-```powershell
-npm version patch -m "chore: release v%s"
-git push origin main --follow-tags
-```
+开发者更新版本后推送 `v版本号` 标签，GitHub Actions 自动编译、测试并发布轻量文件和 zip；参见[更新与发布](docs/更新与发布.md)。
 
-小功能版本可把 `patch` 改为 `minor`。推送 `v版本号` 标签后，GitHub Actions 会检查版本号、测试、打包，并发布安装包。用户在软件「设置 → 检查更新」中前往下载，再退出软件并覆盖安装，已有资料保留。当前不支持后台自动下载或静默安装。
+## 与 v0.1.0 的关系
 
-完整操作和发布失败的处理方法见[更新与发布](docs/更新与发布.md)。
+v0.2.0 用 Windows 原生界面替代 Electron。旧版源码和安装包保留在 [v0.1.0 标签](https://github.com/qzm-qzm/super-brain/tree/v0.1.0)和对应 Release；旧版 `%APPDATA%/SuperBrain` 资料不会被修改。
+
+轻量版密码库使用独立的 v2 格式，**不能直接导入 v0.1.0 的加密备份**。已有旧版密码资料请先保留旧版与备份，在旧版解锁后迁入；不要直接把旧版数据覆盖到新 `data` 目录。
+
+当前运行文件未做 Windows 代码签名，系统可能提示未知发布者。发布页附 SHA-256 校验文件。密码库尚未经过独立安全审计。

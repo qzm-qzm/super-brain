@@ -1,0 +1,177 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+
+namespace SuperBrain
+{
+    public static class Tests
+    {
+        const string Password = "TEST ONLY 主密码 phrase 2026";
+        const string Secret = "TEST SECRET never plaintext!";
+        static string root;
+        static int passed;
+        static Application app;
+        static BrainWindow window;
+        static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
+        static void Throws(Action action, string message) { bool rejected = false; try { action(); } catch { rejected = true; } Assert(rejected, message); }
+        static string DirectoryFor(string name) { string directory = Path.Combine(root, name); Directory.CreateDirectory(directory); return directory; }
+        static Record Account(string id = "demo") { return new Record { id = id, title = "Private account", username = "test@example.invalid", password = Secret, body = "Private note" }; }
+        static void Check(string title, Action run) { run(); passed++; Console.WriteLine("PASS " + title); }
+        [STAThread]
+        public static int Main(string[] args)
+        {
+            root = Path.Combine(args.Length > 0 ? Path.GetFullPath(args[0]) : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "test-results"), "native-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            try
+            {
+                CoreTests(); UiTests();
+                Console.WriteLine("PASS " + passed + " checks; screenshot=" + Path.Combine(root, "preview.png"));
+                File.WriteAllText(Path.Combine(root, "result.json"), JsonFile.Encode(new { passed = passed, success = true, workingSetMiB = Process.GetCurrentProcess().WorkingSet64 / 1024 / 1024 })); return 0;
+            }
+            catch (Exception e) { Console.Error.WriteLine(e); File.WriteAllText(Path.Combine(root, "failure.txt"), e.ToString()); return 1; }
+            finally { if (window != null) { try { Call(window, "Quit"); } catch { window.Close(); } } if (app != null) app.Shutdown(); }
+        }
+        static void CoreTests()
+        {
+            Check("native PBKDF2 matches .NET reference including Unicode", delegate
+            {
+                var salt = Encoding.UTF8.GetBytes("known-test-salt-32-byte-long-2026!"); byte[] expected;
+                using (var reference = new Rfc2898DeriveBytes(Password, salt, 1000, HashAlgorithmName.SHA256)) expected = reference.GetBytes(64);
+                Assert(expected.SequenceEqual(Crypto.Derive(Password, salt, 1000)), "KDF mismatch");
+            });
+            Check("ordinary notes/config persist beside executable, atomic backup retained", delegate
+            {
+                string dir = DirectoryFor("notes"); var store = new LocalStore(dir); store.SaveConfig(new Preferences { shortcut = "Ctrl+Alt+F8", background = "#20242C", imageTransparency = 37 }); store.Notes.Add(new Record { title = "普通记录", body = "Last accepted note" }); store.SaveNotes(); store.Notes[0].body = "Changed"; store.SaveNotes();
+                var reopened = new LocalStore(dir); Assert(reopened.Notes[0].body == "Changed" && reopened.Config.imageTransparency == 37, "restart mismatch"); Assert(File.Exists(Path.Combine(dir, "notes.json.bak")), "missing backup");
+                Assert(JsonFile.Read<NoteDocument>(Path.Combine(dir, "notes.json.bak")).notes[0].body == "Last accepted note", "wrong backup");
+            });
+            Check("corrupt notes are not overwritten; malformed prefs rejected", delegate
+            {
+                string dir = DirectoryFor("corrupt"); File.WriteAllText(Path.Combine(dir, "notes.json"), "bad JSON"); Throws(delegate { new LocalStore(dir); }, "corrupt data accepted"); Assert(File.ReadAllText(Path.Combine(dir, "notes.json")) == "bad JSON", "corrupt file replaced");
+                Throws(delegate { new Preferences { imageTransparency = 101 }.Validate(); }, "invalid transparency"); Throws(delegate { new Preferences { shortcut = "Q" }.Validate(); }, "invalid hotkey");
+                uint a, b; Throws(delegate { Platform.Shortcut("Ctrl+Ctrl+Q", out a, out b); }, "duplicate modifier");
+            });
+            Check("vault encrypts all metadata; restart, wrong password and immediate lock", delegate
+            {
+                string dir = DirectoryFor("vault"); using (var vault = new Vault(dir))
+                {
+                    Throws(delegate { vault.Setup("short"); }, "short password accepted"); vault.Setup(Password); vault.Save(Account()); var text = File.ReadAllText(vault.FileName);
+                    foreach (var value in new[] { Password, Secret, "test@example.invalid", "Private account", "Private note" }) Assert(!text.Contains(value), "plaintext leaked");
+                    var next = Account(); next.body = "Last edit before lock"; vault.Save(next); vault.Lock(); Throws(delegate { vault.Save(Account()); }, "post-lock save accepted"); Throws(delegate { vault.List(); }, "post-lock list accepted");
+                }
+                using (var restarted = new Vault(dir)) { Throws(delegate { restarted.Unlock("incorrect password"); }, "wrong password accepted"); restarted.Unlock(Password); Assert(restarted.List()[0].body == "Last edit before lock", "lost edit"); }
+            });
+            Check("MAC authenticates ciphertext, IV, salt and bounded KDF parameters", delegate
+            {
+                using (var vault = new Vault(DirectoryFor("tamper")))
+                {
+                    vault.Setup(Password); vault.Save(Account()); var record = vault.Backup(); var key = Crypto.Derive(Password, Convert.FromBase64String(record.salt));
+                    foreach (var field in new[] { "ciphertext", "iv", "salt", "mac" }) { var bad = JsonFile.Clone(record); var property = typeof(VaultEnvelope).GetProperty(field); var bytes = Convert.FromBase64String((string)property.GetValue(bad)); bytes[0] ^= 1; property.SetValue(bad, Convert.ToBase64String(bytes)); Throws(delegate { Crypto.Decrypt(bad, key); }, "tampering accepted: " + field); }
+                    var unreasonable = JsonFile.Clone(record); unreasonable.iterations = Int32.MaxValue; Throws(unreasonable.Validate, "unbounded KDF accepted"); Array.Clear(key, 0, key.Length);
+                }
+            });
+            Check("password rotation and stale unlock cancellation", delegate
+            {
+                using (var vault = new Vault(DirectoryFor("rotation")))
+                {
+                    vault.Setup(Password); vault.Save(Account()); const string next = "Replacement password 2026!"; vault.ChangePassword(Password, next); vault.Lock(); Throws(delegate { vault.Unlock(Password); }, "old password accepted"); vault.Unlock(next); Assert(vault.List()[0].password == Secret, "rotation lost data"); vault.Lock();
+                    var pending = Task.Run(delegate { vault.Unlock(next); }); var timer = Stopwatch.StartNew();
+                    var busyField = typeof(Vault).GetField("busy", BindingFlags.Instance | BindingFlags.NonPublic);
+                    while (!(bool)busyField.GetValue(vault) && timer.ElapsedMilliseconds < 1000) Thread.Sleep(1);
+                    vault.Lock(); Throws(delegate { pending.GetAwaiter().GetResult(); }, "late unlock was not cancelled"); Assert(!vault.Unlocked, "late unlock reopened vault");
+                }
+            });
+            Check("backup/restore roundtrip; invalid backup cannot change current data", delegate
+            {
+                string dir = DirectoryFor("backup"); var store = new LocalStore(dir); using (var vault = new Vault(dir))
+                {
+                    store.SaveConfig(new Preferences { shortcut = "F9", imageTransparency = 28 }); store.Notes.Add(new Record { title = "Before" }); store.SaveNotes(); vault.Setup(Password); vault.Save(Account());
+                    string file = Path.Combine(root, "backup.json"); store.Export(file, vault); Assert(!File.ReadAllText(file).Contains(Secret), "plaintext backup");
+                    var backup = JsonFile.Read<BackupDocument>(file, JsonFile.BackupLimit); store.Notes[0].title = "After"; store.SaveNotes(); var account = Account(); account.password = "changed"; vault.Save(account);
+                    store.Restore(backup, vault); Assert(!vault.Unlocked && store.Notes[0].title == "Before", "restore state mismatch"); vault.Unlock(Password); Assert(vault.List()[0].password == Secret, "restore password mismatch"); Assert(Directory.GetFiles(dir, "before-restore-*.json").Length == 1, "missing pre-restore backup");
+                    backup.version = 999; Throws(delegate { store.Restore(backup, vault); }, "invalid restore accepted"); Assert(store.Notes[0].title == "Before", "invalid restore changed data");
+                }
+            });
+            Check("combined backup can exceed per-file cap", delegate
+            {
+                string dir = DirectoryFor("large"); var store = new LocalStore(dir); using (var vault = new Vault(dir))
+                {
+                    for (int i = 0; i < 88; i++) store.Notes.Add(new Record { body = new string('n', 100000) }); store.SaveNotes();
+                    var records = Enumerable.Range(0, 65).Select(i => new Record { body = new string('v', 100000) }).ToList(); var salt = Crypto.Random(32); var key = Crypto.Derive(Password, salt); vault.Restore(Crypto.Encrypt(records, key, salt)); Array.Clear(key, 0, key.Length);
+                    string file = Path.Combine(dir, "large-backup.json"); store.Export(file, vault); Assert(new FileInfo(file).Length > JsonFile.Limit, "fixture did not exceed cap"); Assert(JsonFile.Read<BackupDocument>(file, JsonFile.BackupLimit).data.notes.Count == 88, "large backup unreadable");
+                }
+                // Only this test's freshly-created large fixtures are discarded.
+                Assert(Path.GetDirectoryName(dir) == root, "cleanup path escaped test root"); Directory.Delete(dir, true);
+            });
+        }
+        static void UiTests()
+        {
+            app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown }; SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext()); string directory = DirectoryFor("ui"); var setup = new LocalStore(directory); setup.SaveConfig(new Preferences { shortcut = "Ctrl+Alt+Shift+F24" });
+            uint showMessage = Platform.RegisterWindowMessage("SuperBrainLite.Test." + Guid.NewGuid().ToString("N"));
+            window = new BrainWindow(directory, showMessage) { ShowActivated = false }; window.Show(); Pump();
+            Check("real WPF note edit, native close flush and reveal message", delegate
+            {
+                Click("new-item"); Find<TextBox>("edit-title").Text = "随时记下灵感"; Find<TextBox>("edit-body").Text = "按 F8 呼出小窗，写完就收起来。";
+                window.Close(); Pump(); Assert(!window.IsVisible, "close did not hide"); Assert(new LocalStore(directory).Notes[0].body.StartsWith("按 F8"), "native close lost final note edit");
+                Platform.PostMessage(new WindowInteropHelper(window).Handle, showMessage, IntPtr.Zero, IntPtr.Zero); Wait(delegate { return window.IsVisible; }); Click("back");
+            });
+            Check("global shortcut registered and WM_HOTKEY toggles window", delegate
+            {
+                uint modifiers, key; Platform.Shortcut("Ctrl+Alt+Shift+F24", out modifiers, out key); Assert(!Platform.RegisterHotKey(new WindowInteropHelper(window).Handle, 99, modifiers, key), "hotkey not registered");
+                int id = (int)typeof(BrainWindow).GetField("hotkeyId", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window); window.Activate(); Pump(); Platform.PostMessage(new WindowInteropHelper(window).Handle, 0x312, new IntPtr(id), IntPtr.Zero); Wait(delegate { return !window.IsVisible; }); Platform.PostMessage(new WindowInteropHelper(window).Handle, 0x312, new IntPtr(id), IntPtr.Zero); Wait(delegate { return window.IsVisible; });
+            });
+            Check("real password form, edit, hide lock, unlock and secret persistence", delegate
+            {
+                Click("vault-tab"); Find<PasswordBox>("master-password").Password = Password; Find<PasswordBox>("confirm-password").Password = Password; Find<CheckBox>("master-acknowledge").IsChecked = true; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null; });
+                Click("new-item"); Find<TextBox>("edit-title").Text = "TEST account"; Find<PasswordBox>("edit-password").Password = Secret; Find<TextBox>("edit-body").Text = "Last secret edit"; Click("hide-window"); Assert(!window.IsVisible, "not hidden"); Assert(Find<PasswordBox>("edit-password", false) == null, "secret DOM survived lock");
+                Platform.PostMessage(new WindowInteropHelper(window).Handle, showMessage, IntPtr.Zero, IntPtr.Zero); Wait(delegate { return window.IsVisible; }); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null; });
+                var record = Descendants(window).OfType<Button>().First(b => AutomationProperties.GetAutomationId(b).StartsWith("record-")); record.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); Assert(Find<PasswordBox>("edit-password").Password == Secret && Find<TextBox>("edit-body").Text == "Last secret edit", "UI secret mismatch"); Click("back"); Click("notes-tab");
+            });
+            Check("appearance changes persist and transparency is independent", delegate
+            {
+                var imageConfig = (Preferences)typeof(BrainWindow).GetField("config", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
+                var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, new byte[] { 200, 140, 80, 255 }, 4)));
+                using (var bytes = new MemoryStream()) { png.Save(bytes); imageConfig.image = "data:image/png;base64," + Convert.ToBase64String(bytes.ToArray()); }
+                Call(window, "AppearanceChanged");
+                var openAppearance = Find<Button>("appearance");
+                window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)delegate
+                {
+                    Window dialog = app.Windows.Cast<Window>().First(w => w != window); var input = Descendants(dialog).OfType<TextBox>().First(t => AutomationProperties.GetAutomationId(t) == "background-color"); input.Text = "#20242C";
+                    var slider = Descendants(dialog).OfType<Slider>().Single(); slider.Value = 37;
+                    Descendants(dialog).OfType<Button>().First(b => AutomationProperties.GetAutomationId(b) == "appearance-done").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                });
+                openAppearance.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); var saved = new LocalStore(directory); Assert(saved.Config.image.StartsWith("data:image/png;base64,") && Descendants(window).OfType<Image>().Any(i => i.Source != null && Math.Abs(i.Opacity - .63) < .001), "background image opacity mismatch");
+                Assert(saved.Config.background == "#20242C" && saved.Config.imageTransparency == 37 && saved.Config.shortcut == "Ctrl+Alt+Shift+F24", "appearance not persisted");
+            });
+            Check("UI restart reads same profile and starts vault locked", delegate
+            {
+                Call(window, "Quit"); window = new BrainWindow(directory, showMessage) { ShowActivated = false }; window.Show(); Pump(); Click("vault-tab"); Assert(Find<PasswordBox>("master-password", false) != null, "restart did not lock"); Click("notes-tab");
+            });
+            // Produce a clean preview with synthetic records only.
+            var preferences = JsonFile.Clone(new LocalStore(directory).Config); preferences.image = ""; preferences.background = "#F6F8FB"; preferences.accent = "#48648E"; preferences.shortcut = "F8";
+            typeof(BrainWindow).GetField("config", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(window, preferences); Call(window, "ApplyTheme");
+            foreach (var record in new[] { new Record { title = "本周的小计划", body = "整理桌面文件，给绿植浇水，周末去散步。" }, new Record { title = "想读的书", body = "记下书名，也记下看到它时的想法。" } }) { Click("new-item"); Find<TextBox>("edit-title").Text = record.title; Find<TextBox>("edit-body").Text = record.body; Click("back"); }
+            Pump(); var image = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32); image.Render(window); var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); using (var stream = File.Create(Path.Combine(root, "preview.png"))) encoder.Save(stream);
+            Call(window, "Quit"); window = null;
+        }
+        static IEnumerable<DependencyObject> Descendants(DependencyObject parent) { yield return parent; for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++) foreach (var child in Descendants(VisualTreeHelper.GetChild(parent, i))) yield return child; }
+        static T Find<T>(string id, bool required = true) where T : FrameworkElement { Pump(); var found = Descendants(window).OfType<T>().FirstOrDefault(e => AutomationProperties.GetAutomationId(e) == id); if (required && found == null) throw new Exception("Missing UI element: " + id); return found; }
+        static void Click(string id) { Find<Button>(id).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); }
+        static void Call(object target, string name) { typeof(BrainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(target, null); Pump(); }
+        static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, (Action)delegate { frame.Continue = false; }); Dispatcher.PushFrame(frame); }
+        static void Wait(Func<bool> predicate) { var timer = Stopwatch.StartNew(); while (!predicate()) { Pump(); Thread.Sleep(10); if (timer.ElapsedMilliseconds > 15000) throw new Exception("UI wait timed out"); } Pump(); }
+    }
+}
