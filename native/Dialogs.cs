@@ -26,15 +26,17 @@ namespace SuperBrain
         void Brush(string key, Color value) { var brush = new SolidColorBrush(value); brush.Freeze(); Resources[key] = brush; }
         void ApplyTheme()
         {
-            var bg = ColorOf(config.background); bool dark = Contrast(Colors.White, bg) > Contrast(Colors.Black, bg); var ink = dark ? Colors.White : ColorOf("#18212D"); var accent = Legible(ColorOf(config.accent), bg, 5.0);
-            Brush("Paper", bg); Brush("Ink", Legible(ink, bg, 12)); Brush("Muted", Legible(Mix(bg, ink, .68), bg, 6)); Brush("Accent", accent);
+            var bg = ColorOf(config.background); bool dark = Contrast(Colors.White, bg) > Contrast(Colors.Black, bg);
+            var surface = dark ? Mix(bg, Colors.Black, .22) : Mix(bg, Colors.White, .96);
+            var panel = dark ? Mix(bg, Colors.Black, .18) : Mix(bg, Colors.White, .96);
+            var ink = dark ? ColorOf("#EDF0F5") : ColorOf("#242830"); var accent = Legible(ColorOf(config.accent), surface, 4.5);
+            Brush("Paper", bg); Brush("Ink", Legible(ink, surface, 10)); Brush("Muted", Legible(dark ? ColorOf("#AEB8C7") : ColorOf("#626B78"), surface, 4.8)); Brush("Accent", accent);
             Brush("OnAccent", Contrast(Colors.White, accent) > Contrast(Colors.Black, accent) ? Colors.White : Colors.Black);
-            var surface = Mix(bg, Colors.White, dark ? .09 : .78);
             Brush("Surface", surface);
-            var panel = Mix(bg, dark ? Colors.Black : Colors.White, dark ? .10 : .42);
-            Brush("Panel", Color.FromArgb(226, panel.R, panel.G, panel.B));
-            Brush("Selected", Mix(bg, accent, dark ? .24 : .13));
-            Brush("Line", Mix(bg, ink, dark ? .27 : .20)); Brush("Control", Legible(Mix(bg, ink, .4), bg, 3)); Brush("Hover", Mix(bg, ink, .07)); Brush("Danger", Legible(ColorOf("#B03131"), bg, 5));
+            Brush("SearchSurface", Mix(surface, ink, dark ? .06 : .035)); Brush("Panel", panel);
+            Brush("Selected", Mix(surface, accent, dark ? .20 : .085));
+            Brush("Line", Mix(surface, ink, dark ? .20 : .12)); Brush("Control", Legible(Mix(surface, ink, .4), surface, 3)); Brush("Hover", Mix(surface, accent, .045)); Brush("Danger", Legible(ColorOf("#B73342"), surface, 5));
+            Brush("Favorite", Legible(ColorOf("#AD741B"), surface, 4.5)); Brush("FavoriteBorder", Mix(surface, accent, .38));
             wallpaper.Opacity = 1 - config.imageTransparency / 100.0; Topmost = config.alwaysOnTop;
             if (config.image == cachedImage) return; cachedImage = config.image;
             if (String.IsNullOrEmpty(config.image)) wallpaper.Source = null;
@@ -49,7 +51,8 @@ namespace SuperBrain
         {
             if (activeDialog != null) { activeDialog.Activate(); return null; }
             SavePending(); var window = new Window { Owner = this, Title = title, Width = 420, Height = height, MinWidth = 390, MinHeight = 360, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false, FontFamily = FontFamily, FontSize = 13 };
-            window.Resources.MergedDictionaries.Add(Resources); window.SetResourceReference(Window.BackgroundProperty, "Paper"); window.SetResourceReference(Window.ForegroundProperty, "Ink");
+            window.UseLayoutRounding = true; TextOptions.SetTextFormattingMode(window, TextFormattingMode.Display);
+            window.Resources.MergedDictionaries.Add(Resources); window.SetResourceReference(Window.BackgroundProperty, "Surface"); window.SetResourceReference(Window.ForegroundProperty, "Ink");
             body.Margin = new Thickness(22, 16, 22, 18); window.Content = new ScrollViewer { Content = body };
             window.PreviewKeyDown += delegate(object sender, KeyEventArgs e) { activityAt = DateTime.UtcNow; if (e.Key == Key.Escape) { e.Handled = true; window.Close(); } };
             window.PreviewMouseDown += delegate { activityAt = DateTime.UtcNow; };
@@ -59,9 +62,9 @@ namespace SuperBrain
         void ShowAppearance()
         {
             var body = new StackPanel(); var dialog = Dialog("外观 · 超强大脑", body, 675); if (dialog == null) return;
-            body.Children.Add(Text("让超强大脑更像你的空间。", 18, false, true)); body.Children.Add(Text("配色、背景图片和透明度，随时调整。", 12, true));
+            body.Children.Add(Text("外观", 18, false, true)); body.Children.Add(Text("背景图片单独调节，文字和按钮始终清晰。", 12, true));
             var themes = new WrapPanel { Margin = new Thickness(0, 14, 0, 4) };
-            string[][] presets = { new[] { "云雾白", "#F6F8FB", "#48648E" }, new[] { "石墨黑", "#20242C", "#AEC6FF" }, new[] { "雾蓝", "#EAF2FA", "#345F91" }, new[] { "奶油", "#FBF5E9", "#866343" }, new[] { "浅樱", "#F8EEF1", "#9B4D68" }, new[] { "鼠尾草", "#EEF3EE", "#43684D" } };
+            string[][] presets = { new[] { "云雾白", "#F8F9FB", "#1665D8" }, new[] { "石墨黑", "#20242C", "#AEC6FF" }, new[] { "雾蓝", "#EAF2FA", "#345F91" }, new[] { "奶油", "#FBF5E9", "#866343" }, new[] { "浅樱", "#F8EEF1", "#9B4D68" }, new[] { "鼠尾草", "#EEF3EE", "#43684D" } };
             TextBox background = null, accent = null;
             foreach (var values in presets)
             {
@@ -85,16 +88,16 @@ namespace SuperBrain
             imageActions.Children.Add(Button("移除图片", "remove-image", delegate { config.image = ""; AppearanceChanged(); })); body.Children.Add(imageActions);
             body.Children.Add(Text("支持 PNG、JPG，最大 2 MB。图片随资料一起保存。", 11, true));
             var valueLabel = Text("图片透明度  " + config.imageTransparency + "%", 13); valueLabel.Margin = new Thickness(0, 16, 0, 8); body.Children.Add(valueLabel);
-            var transparency = Identify(new Slider { Minimum = 0, Maximum = 100, Value = config.imageTransparency, TickFrequency = 1, IsSnapToTickEnabled = true }, "image-transparency", "图片透明度");
+            var transparency = Identify(new Slider { Minimum = 0, Maximum = 100, Value = config.imageTransparency, TickFrequency = 1, IsSnapToTickEnabled = true, Height = 24 }, "image-transparency", "图片透明度");
             transparency.ValueChanged += delegate { config.imageTransparency = (int)transparency.Value; valueLabel.Text = "图片透明度  " + config.imageTransparency + "%"; AppearanceChanged(); }; body.Children.Add(transparency); body.Children.Add(Text("0% 不透明                         100% 完全透明", 11, true));
             var controls = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 20, 0, 0) };
-            controls.Children.Add(Button("恢复默认", "reset-appearance", delegate { config.background = "#F6F8FB"; config.accent = "#48648E"; config.image = ""; config.imageTransparency = 90; background.Text = config.background; accent.Text = config.accent; transparency.Value = 90; AppearanceChanged(); })); controls.Children.Add(Button("完成", "appearance-done", delegate { SavePending(); dialog.Close(); }, true)); body.Children.Add(controls);
+            controls.Children.Add(Button("恢复默认", "reset-appearance", delegate { config.background = "#F8F9FB"; config.accent = "#1665D8"; config.image = ""; config.imageTransparency = 35; background.Text = config.background; accent.Text = config.accent; transparency.Value = 35; AppearanceChanged(); })); controls.Children.Add(Button("完成", "appearance-done", delegate { SavePending(); dialog.Close(); }, true)); body.Children.Add(controls);
             dialog.ShowDialog();
         }
         void ShowSettings()
         {
             var body = new StackPanel(); var dialog = Dialog("设置 · 超强大脑", body, 690); if (dialog == null) return;
-            body.Children.Add(Text("随时呼出，随手记录。", 18, false, true));
+            body.Children.Add(Text("设置", 18, false, true));
             var hotkey = Identify(new TextBox { Text = config.shortcut, MaxLength = 60, IsReadOnly = true, IsReadOnlyCaretVisible = false, Cursor = Cursors.Hand }, "setting-shortcut", "点击后按键设置全局快捷键");
             Field(body, "呼出 / 收起快捷键", hotkey);
             var captureHelp = Text("点击上方输入框，然后直接按想绑定的键。", 11, true); body.Children.Add(captureHelp);
@@ -144,11 +147,11 @@ namespace SuperBrain
                 }
                 catch (Exception e) { error.Text = e.Message; }
             }, true));
-            body.Children.Add(Text("资料与备份", 15, false, true)); body.Children.Add(Text("全部资料保存在旁边的 data 文件夹。普通备忘录为明文，账号密码单独加密。", 12, true));
-            var data = new WrapPanel(); data.Children.Add(Button("导出备份", "export-backup", ExportBackup)); data.Children.Add(Button("恢复备份", "import-backup", ImportBackup)); data.Children.Add(Button("打开 data 文件夹", "open-data", delegate { Platform.Open(store.DirectoryPath); })); body.Children.Add(data);
+            var heading = Text("资料与备份", 14, false, true); heading.Margin = new Thickness(0, 24, 0, 6); body.Children.Add(heading); body.Children.Add(Text("资料在同目录 data 文件夹中。普通备忘录为明文，密码库单独加密。", 12, true));
+            var data = new WrapPanel { Margin = new Thickness(0, 7, 0, 0) }; var export = Button("导出备份", "export-backup", ExportBackup); export.Margin = new Thickness(0, 0, 6, 6); data.Children.Add(export); var import = Button("恢复备份", "import-backup", ImportBackup); import.Margin = new Thickness(0, 0, 6, 6); data.Children.Add(import); var directory = Button("打开 data 文件夹", "open-data", delegate { Platform.Open(store.DirectoryPath); }); directory.Margin = new Thickness(0, 0, 0, 6); data.Children.Add(directory); body.Children.Add(data);
             var change = Button("修改主密码", "change-master", delegate { dialog.Close(); ShowPasswordChange(); }); change.IsEnabled = vault.Unlocked; body.Children.Add(change);
-            body.Children.Add(Text("超强大脑 " + Platform.Version + " · 轻量版", 12, true)); body.Children.Add(Text("更新时退出后替换运行文件，保留 data 文件夹。", 11, true));
-            var bottom = new WrapPanel(); bottom.Children.Add(Button("查看新版本", "updates", delegate { Platform.Open(Platform.Repository + "/releases/latest"); })); bottom.Children.Add(Button("源码", "repository", delegate { Platform.Open(Platform.Repository); })); bottom.Children.Add(Button("退出工具", "quit", Quit)); body.Children.Add(bottom);
+            var version = Text("超强大脑 " + Platform.Version + " · 轻量版", 12, true); version.Margin = new Thickness(0, 24, 0, 4); body.Children.Add(version); body.Children.Add(Text("更新时替换运行文件，保留 data 文件夹。", 11, true));
+            var bottom = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) }; var updates = Button("查看新版本", "updates", delegate { Platform.Open(Platform.Repository + "/releases/latest"); }); updates.Margin = new Thickness(0, 0, 6, 6); bottom.Children.Add(updates); var source = Button("源码", "repository", delegate { Platform.Open(Platform.Repository); }); source.Margin = new Thickness(0, 0, 6, 6); bottom.Children.Add(source); bottom.Children.Add(Button("退出工具", "quit", Quit)); body.Children.Add(bottom);
             dialog.ShowDialog();
         }
         void ExportBackup()

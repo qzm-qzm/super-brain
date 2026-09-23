@@ -14,14 +14,14 @@ using System.Windows.Interop;
 [assembly: AssemblyDescription("超强大脑轻量版 · 双击即用")]
 [assembly: AssemblyCompany("qzm-qzm")]
 [assembly: AssemblyProduct("超强大脑")]
-[assembly: AssemblyVersion("0.2.2.0")]
-[assembly: AssemblyFileVersion("0.2.2.0")]
+[assembly: AssemblyVersion("0.2.3.0")]
+[assembly: AssemblyFileVersion("0.2.3.0")]
 
 namespace SuperBrain
 {
     public static class Platform
     {
-        public const string Version = "0.2.2";
+        public const string Version = "0.2.3";
         public const string Repository = "https://github.com/qzm-qzm/super-brain";
         [DllImport("user32.dll", SetLastError = true)] public static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
         [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr window, int id);

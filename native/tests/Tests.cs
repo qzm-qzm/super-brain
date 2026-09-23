@@ -72,7 +72,7 @@ namespace SuperBrain
             {
                 string dir = DirectoryFor("corrupt"); File.WriteAllText(Path.Combine(dir, "notes.json"), "bad JSON"); Throws(delegate { new LocalStore(dir); }, "corrupt data accepted"); Assert(File.ReadAllText(Path.Combine(dir, "notes.json")) == "bad JSON", "corrupt file replaced");
                 Throws(delegate { new Preferences { imageTransparency = 101 }.Validate(); }, "invalid transparency"); Throws(delegate { new Preferences { shortcut = "Q" }.Validate(); }, "invalid hotkey");
-                var oldConfig = JsonFile.Decode<Preferences>("{\"shortcut\":\"F8\"}"); oldConfig.Validate(); Assert(oldConfig.windowWidth == 480 && oldConfig.windowHeight == 720, "old configuration lost default window size");
+                var oldConfig = JsonFile.Decode<Preferences>("{\"shortcut\":\"F8\"}"); oldConfig.Validate(); Assert(oldConfig.windowWidth == 424 && oldConfig.windowHeight == 634, "old configuration lost default window size");
                 Throws(delegate { new Preferences { windowWidth = 100 }.Validate(); }, "invalid window size accepted");
                 uint a, b; Throws(delegate { Platform.Shortcut("Ctrl+Ctrl+Q", out a, out b); }, "duplicate modifier");
                 Assert(Platform.CapturedShortcut(Key.F8, ModifierKeys.None) == "F8", "single function key capture");
@@ -144,10 +144,11 @@ namespace SuperBrain
             window = new BrainWindow(directory, showMessage) { ShowActivated = false }; window.Show(); Pump();
             Check("native title drag area and window position survive restart", delegate
             {
-                Assert(WindowChrome.GetWindowChrome(window).CaptionHeight >= 80, "window title cannot be dragged");
+                Assert(WindowChrome.GetWindowChrome(window).CaptionHeight >= 44 && WindowChrome.GetWindowChrome(window).CaptionHeight <= 56, "window title cannot be dragged");
                 Assert(WindowChrome.GetIsHitTestVisibleInChrome(Find<StackPanel>("window-actions")), "title buttons blocked by drag area");
                 Assert(HitTest(Find<StackPanel>("window-drag-region")) == 2, "title does not hit test as draggable caption");
                 Assert(HitTest(Find<Button>("appearance")) == 1, "title action cannot be clicked");
+                Assert(HitTest(Find<TextBox>("search")) == 1, "search field is intercepted by window dragging");
                 window.Left += 45; window.Top += 30; window.Width = 500; window.Height = 680; Pump(); Call(window, "SavePending");
                 var position = new LocalStore(directory).Config;
                 Assert(Math.Abs(position.windowLeft.Value - window.Left) < 2 && Math.Abs(position.windowTop.Value - window.Top) < 2, "window position was not saved");
@@ -166,9 +167,9 @@ namespace SuperBrain
             });
             Check("real password form, edit, hide lock, unlock and secret persistence", delegate
             {
-                Click("vault-tab"); Find<PasswordBox>("master-password").Password = Password; Find<PasswordBox>("confirm-password").Password = Password; Find<CheckBox>("master-acknowledge").IsChecked = true; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null; });
+                Click("vault-tab"); Find<PasswordBox>("master-password").Password = Password; Find<PasswordBox>("confirm-password").Password = Password; Find<CheckBox>("master-acknowledge").IsChecked = true; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null && Find<Button>("new-item").IsEnabled; });
                 Click("new-item"); Find<TextBox>("edit-title").Text = "TEST account"; Find<PasswordBox>("edit-password").Password = Secret; Find<TextBox>("edit-body").Text = "Last secret edit"; Click("hide-window"); Assert(!window.IsVisible, "not hidden"); Assert(Find<PasswordBox>("edit-password", false) == null, "secret DOM survived lock");
-                Platform.PostMessage(new WindowInteropHelper(window).Handle, showMessage, IntPtr.Zero, IntPtr.Zero); Wait(delegate { return window.IsVisible; }); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null; });
+                Platform.PostMessage(new WindowInteropHelper(window).Handle, showMessage, IntPtr.Zero, IntPtr.Zero); Wait(delegate { return window.IsVisible; }); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null && Find<Button>("new-item").IsEnabled; });
                 var record = Descendants(window).OfType<Button>().First(b => AutomationProperties.GetAutomationId(b).StartsWith("record-")); record.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); Assert(Find<PasswordBox>("edit-password").Password == Secret && Find<TextBox>("edit-body").Text == "Last secret edit", "UI secret mismatch"); Click("back"); Click("notes-tab");
             });
             Check("pressing a key captures and registers shortcut without typing text", delegate
@@ -252,10 +253,43 @@ namespace SuperBrain
                 Assert(Math.Abs(window.Left - left) < 2 && Math.Abs(window.Top - top) < 2 && Math.Abs(window.Width - width) < 2 && Math.Abs(window.Height - height) < 2, "window placement did not restore");
                 Click("vault-tab"); Assert(Find<PasswordBox>("master-password", false) != null, "restart did not lock"); Click("notes-tab");
             });
+            Check("locking the vault clears the persistent header search", delegate
+            {
+                Click("vault-tab"); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item").IsEnabled; });
+                Find<TextBox>("search").Text = "TEST account"; Click("lock-vault");
+                Assert(Find<TextBox>("search").Text == "" && !Find<TextBox>("search").IsEnabled, "locked header leaked a private search");
+                Click("notes-tab");
+            });
+            Check("compact layout, favorite filtering, search and new-record reset", delegate
+            {
+                window.Width = 400; window.Height = 560; Pump();
+                var search = Find<TextBox>("search"); var newButton = Find<Button>("new-item");
+                Assert(search.ActualWidth >= 100 && HitTest(search) == 1, "compact header search is unusable");
+                Assert(newButton.TranslatePoint(new Point(newButton.ActualWidth, 0), window).X <= window.ActualWidth, "new button clipped at minimum width");
+                var savedRecord = new LocalStore(directory).Notes[0];
+                Click("favorite-" + savedRecord.id); Click("favorites");
+                Assert(new LocalStore(directory).Notes[0].pinned, "favorite did not persist");
+                Assert(Find<Button>("record-" + savedRecord.id, false) != null, "favorite filter lost record");
+                Find<TextBox>("search").Text = "no such synthetic record";
+                Assert(!Descendants(window).OfType<Button>().Any(b => AutomationProperties.GetAutomationId(b).StartsWith("record-")), "search did not filter list");
+                Click("new-item"); Find<TextBox>("edit-title").Text = "新建后仍可找到"; Click("back");
+                Assert(Find<TextBox>("search").Text == "", "new item kept a stale search filter");
+                Assert(Descendants(window).OfType<Button>().Count(b => AutomationProperties.GetAutomationId(b).StartsWith("record-")) == 2, "new item kept favorite filter");
+                window.Width = 424; window.Height = 634; Pump();
+            });
             // Produce a clean preview with synthetic records only.
-            var preferences = JsonFile.Clone(new LocalStore(directory).Config); preferences.image = ""; preferences.background = "#F6F8FB"; preferences.accent = "#48648E"; preferences.shortcut = "F8";
+            var preferences = JsonFile.Clone(new LocalStore(directory).Config); preferences.image = ""; preferences.background = "#F8F9FB"; preferences.accent = "#1665D8"; preferences.shortcut = "F8";
             typeof(BrainWindow).GetField("config", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(window, preferences); Call(window, "ApplyTheme");
-            foreach (var record in new[] { new Record { title = "本周的小计划", body = "整理桌面文件，给绿植浇水，周末去散步。" }, new Record { title = "想读的书", body = "记下书名，也记下看到它时的想法。" } }) { Click("new-item"); Find<TextBox>("edit-title").Text = record.title; Find<TextBox>("edit-body").Text = record.body; Click("back"); }
+            var previewStore = (LocalStore)typeof(BrainWindow).GetField("store", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window); previewStore.Notes.Clear();
+            var samples = new[] {
+                new Record { title = "这周要做的事", body = "整理一下桌面，把常用文件归个类。\n周五之前，记得把项目资料备份到移动硬盘。", pinned = true },
+                new Record { title = "常用地址", body = "项目仓库：github.com/qzm-qzm/super-brain\n有新的想法，随时记在这里。", pinned = true },
+                new Record { title = "周末采购清单", body = "咖啡豆、牛奶、鸡蛋\n还有一盆适合放在桌上的绿植。" },
+                new Record { title = "突然想到的一个小点子", body = "把零碎的想法先记下来。\n不用急着整理，等有空再慢慢展开。" },
+                new Record { title = "下次出门别忘了", body = "钥匙、耳机、充电宝，出门前再看一眼天气。" },
+                new Record { title = "值得再读的书", body = "《设计心理学》\n从每天遇到的小问题里，找到好的设计。" }
+            };
+            for (int i = 0; i < samples.Length; i++) { samples[i].updatedAt = DateTime.UtcNow.AddMinutes(-i * 45).ToString("o"); previewStore.Notes.Add(samples[i]); } previewStore.SaveNotes(); Call(window, "Render"); Find<TextBox>("search").Focus();
             Pump(); var image = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32); image.Render(window); var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); using (var stream = File.Create(Path.Combine(root, "preview.png"))) encoder.Save(stream);
             Call(window, "Quit"); window = null;
         }
@@ -274,7 +308,7 @@ namespace SuperBrain
             input.RaiseEvent(args); Pump(); return args;
         }
         static void Click(string id) { Find<Button>(id).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); }
-        static void Call(object target, string name) { typeof(BrainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(target, null); Pump(); }
+        static void Call(object target, string name) { typeof(BrainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic, null, Type.EmptyTypes, null).Invoke(target, null); Pump(); }
         static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, (Action)delegate { frame.Continue = false; }); Dispatcher.PushFrame(frame); }
         static void Wait(Func<bool> predicate) { var timer = Stopwatch.StartNew(); while (!predicate()) { Pump(); Thread.Sleep(10); if (timer.ElapsedMilliseconds > 15000) throw new Exception("UI wait timed out"); } Pump(); }
     }

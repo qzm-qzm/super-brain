@@ -22,7 +22,7 @@ namespace SuperBrain
         public double? windowTop { get; set; }
         public double windowWidth { get; set; }
         public double windowHeight { get; set; }
-        public Preferences() { background = "#F6F8FB"; accent = "#48648E"; image = ""; imageTransparency = 90; shortcut = "F8"; autoLockMinutes = 5; windowWidth = 480; windowHeight = 720; }
+        public Preferences() { background = "#F8F9FB"; accent = "#1665D8"; image = ""; imageTransparency = 35; shortcut = "F8"; autoLockMinutes = 5; windowWidth = 424; windowHeight = 634; }
         public void Validate()
         {
             if (!Regex.IsMatch(background ?? "", "^#[0-9a-fA-F]{6}$") || !Regex.IsMatch(accent ?? "", "^#[0-9a-fA-F]{6}$")) throw new Exception("颜色应为六位色值，例如 #F6F8FB。");
@@ -127,6 +127,8 @@ namespace SuperBrain
         {
             DirectoryPath = Path.GetFullPath(directory); Directory.CreateDirectory(DirectoryPath);
             Config = JsonFile.Read<Preferences>(FilePath("config.json")) ?? new Preferences(); Config.Validate();
+            // Upgrade only the previous stock palette; custom colors, images and window placement stay intact.
+            if (String.Equals(Config.background, "#F6F8FB", StringComparison.OrdinalIgnoreCase) && String.Equals(Config.accent, "#48648E", StringComparison.OrdinalIgnoreCase)) { Config.background = "#F8F9FB"; Config.accent = "#1665D8"; }
             var saved = JsonFile.Read<NoteDocument>(FilePath("notes.json")) ?? new NoteDocument();
             if (saved.version != 2) throw new Exception("备忘录版本不受支持，原资料未被修改。");
             Record.ValidateList(saved.notes); Notes = saved.notes;
