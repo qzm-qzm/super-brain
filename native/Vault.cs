@@ -43,14 +43,13 @@ namespace SuperBrain
         [DllImport("bcrypt.dll")] static extern int BCryptDeriveKeyPBKDF2(IntPtr algorithm, byte[] password, int passwordLength, byte[] salt, int saltLength, ulong iterations, byte[] output, int outputLength, uint flags);
         [DllImport("bcrypt.dll")] static extern int BCryptCloseAlgorithmProvider(IntPtr algorithm, uint flags);
         public static byte[] Random(int length) { var bytes = new byte[length]; using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(bytes); return bytes; }
-        public static void CheckPassword(string password, bool creating)
+        public static void CheckPassword(string password)
         {
             if (String.IsNullOrEmpty(password) || password.Length > 1024) throw new Exception("请输入主密码。");
-            if (creating && password.Length < 12) throw new Exception("主密码至少需要 12 个字符，可以使用较长的中文短句。");
         }
         public static byte[] Derive(string password, byte[] salt, int iterations = Iterations)
         {
-            CheckPassword(password, false); IntPtr algorithm = IntPtr.Zero; byte[] text = Encoding.UTF8.GetBytes(password), key = new byte[64];
+            CheckPassword(password); IntPtr algorithm = IntPtr.Zero; byte[] text = Encoding.UTF8.GetBytes(password), key = new byte[64];
             try
             {
                 if (BCryptOpenAlgorithmProvider(out algorithm, "SHA256", null, 8) != 0 || BCryptDeriveKeyPBKDF2(algorithm, text, text.Length, salt, salt.Length, (ulong)iterations, key, key.Length, 0) != 0) throw new Exception("Windows 加密服务无法派生密钥。");
@@ -119,7 +118,7 @@ namespace SuperBrain
         public void Unlock(string password) { Open(password, false); }
         void Open(string password, bool create)
         {
-            Crypto.CheckPassword(password, create); long generation; VaultEnvelope record;
+            Crypto.CheckPassword(password); long generation; VaultEnvelope record;
             lock (gate) { RequireIdle(); if (create == (envelope != null)) throw new Exception(create ? "密码库已创建。" : "请先创建密码库。"); busy = true; generation = epoch; record = envelope; }
             byte[] derived = null;
             try
@@ -152,7 +151,7 @@ namespace SuperBrain
         public VaultEnvelope Backup() { lock (gate) { Flush(); return persisted == null ? null : JsonFile.Clone(persisted); } }
         public void ChangePassword(string oldPassword, string nextPassword)
         {
-            Crypto.CheckPassword(nextPassword, true); long generation; VaultEnvelope record;
+            Crypto.CheckPassword(nextPassword); long generation; VaultEnvelope record;
             lock (gate) { RequireIdle(); RequireUnlocked(); busy = true; generation = epoch; record = envelope; }
             byte[] previous = null, next = null;
             try

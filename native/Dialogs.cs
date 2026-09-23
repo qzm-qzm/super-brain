@@ -185,7 +185,7 @@ namespace SuperBrain
             if (!vault.Unlocked) throw new Exception("请先解锁密码库。");
             var body = new StackPanel(); var dialog = Dialog("修改主密码", body, 500); if (dialog == null) return;
             var old = Identify(new PasswordBox { MaxLength = 1024 }, "old-master", "当前主密码"); var next = Identify(new PasswordBox { MaxLength = 1024 }, "new-master", "新主密码"); var again = Identify(new PasswordBox { MaxLength = 1024 }, "repeat-master", "再次输入新主密码");
-            Field(body, "当前主密码", old); Field(body, "新主密码（至少 12 个字符）", next); Field(body, "再次输入新主密码", again); body.Children.Add(Text("旧备份仍需要旧主密码。", 12, true));
+            Field(body, "当前主密码", old); Field(body, "新主密码", next); Field(body, "再次输入新主密码", again); body.Children.Add(Text("旧备份仍需要旧主密码。", 12, true));
             var error = Text("", 12); error.SetResourceReference(TextBlock.ForegroundProperty, "Danger"); body.Children.Add(error);
             var submit = Button("修改主密码", "save-master", delegate { }, true);
             submit.Click += async delegate

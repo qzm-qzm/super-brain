@@ -110,11 +110,27 @@ namespace SuperBrain
             {
                 string dir = DirectoryFor("vault"); using (var vault = new Vault(dir))
                 {
-                    Throws(delegate { vault.Setup("short"); }, "short password accepted"); vault.Setup(Password); vault.Save(Account()); var text = File.ReadAllText(vault.FileName);
+                    Throws(delegate { vault.Setup(""); }, "empty password accepted"); vault.Setup(Password); vault.Save(Account()); var text = File.ReadAllText(vault.FileName);
                     foreach (var value in new[] { Password, Secret, "test@example.invalid", "Private account", "Private note" }) Assert(!text.Contains(value), "plaintext leaked");
                     var next = Account(); next.body = "Last edit before lock"; vault.Save(next); vault.Lock(); Throws(delegate { vault.Save(Account()); }, "post-lock save accepted"); Throws(delegate { vault.List(); }, "post-lock list accepted");
                 }
                 using (var restarted = new Vault(dir)) { Throws(delegate { restarted.Unlock("incorrect password"); }, "wrong password accepted"); restarted.Unlock(Password); Assert(restarted.List()[0].body == "Last edit before lock", "lost edit"); }
+            });
+            Check("short master password survives restart; empty replacements do not change the vault", delegate
+            {
+                string dir = DirectoryFor("short-master");
+                using (var vault = new Vault(dir))
+                {
+                    Throws(delegate { vault.Setup(null); }, "null password accepted");
+                    Throws(delegate { vault.Setup(""); }, "empty password accepted");
+                    Throws(delegate { vault.Setup(new string('x', 1025)); }, "oversized password accepted");
+                    Assert(!File.Exists(vault.FileName), "invalid setup wrote a vault");
+                    vault.Setup("7"); vault.Save(Account()); string original = File.ReadAllText(vault.FileName);
+                    Throws(delegate { vault.ChangePassword("7", ""); }, "empty replacement accepted");
+                    Assert(File.ReadAllText(vault.FileName) == original && vault.List()[0].password == Secret, "rejected replacement changed data");
+                    Assert(!original.Contains(Secret), "short master password disabled encryption");
+                }
+                using (var reopened = new Vault(dir)) { reopened.Unlock("7"); Assert(reopened.List()[0].password == Secret, "short password could not reopen saved vault"); }
             });
             Check("MAC authenticates ciphertext, IV, salt and bounded KDF parameters", delegate
             {
@@ -129,7 +145,7 @@ namespace SuperBrain
             {
                 using (var vault = new Vault(DirectoryFor("rotation")))
                 {
-                    vault.Setup(Password); vault.Save(Account()); const string next = "Replacement password 2026!"; vault.ChangePassword(Password, next); vault.Lock(); Throws(delegate { vault.Unlock(Password); }, "old password accepted"); vault.Unlock(next); Assert(vault.List()[0].password == Secret, "rotation lost data"); vault.Lock();
+                    vault.Setup(Password); vault.Save(Account()); const string next = "短码"; vault.ChangePassword(Password, next); vault.Lock(); Throws(delegate { vault.Unlock(Password); }, "old password accepted"); vault.Unlock(next); Assert(vault.List()[0].password == Secret, "rotation lost data"); vault.Lock();
                     var pending = Task.Run(delegate { vault.Unlock(next); }); var timer = Stopwatch.StartNew();
                     var busyField = typeof(Vault).GetField("busy", BindingFlags.Instance | BindingFlags.NonPublic);
                     while (!(bool)busyField.GetValue(vault) && timer.ElapsedMilliseconds < 1000) Thread.Sleep(1);
@@ -161,6 +177,7 @@ namespace SuperBrain
         }
         static void UiTests()
         {
+            string uiPassword = "短码";
             app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown }; SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext()); string directory = DirectoryFor("ui"); var setup = new LocalStore(directory); setup.SaveConfig(new Preferences { shortcut = "Ctrl+Alt+Shift+F24" });
             uint showMessage = Platform.RegisterWindowMessage("SuperBrainLite.Test." + Guid.NewGuid().ToString("N"));
             window = new BrainWindow(directory, showMessage) { ShowActivated = false }; window.Show(); Pump();
@@ -189,10 +206,23 @@ namespace SuperBrain
             });
             Check("real password form, edit, hide lock, unlock and secret persistence", delegate
             {
-                Click("vault-tab"); Find<PasswordBox>("master-password").Password = Password; Find<PasswordBox>("confirm-password").Password = Password; Find<CheckBox>("master-acknowledge").IsChecked = true; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null && Find<Button>("new-item").IsEnabled; });
+                Click("vault-tab"); Find<PasswordBox>("master-password").Password = uiPassword; Find<PasswordBox>("confirm-password").Password = uiPassword; Find<CheckBox>("master-acknowledge").IsChecked = true; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null && Find<Button>("new-item").IsEnabled; });
                 Click("new-item"); Find<TextBox>("edit-title").Text = "TEST account"; Find<PasswordBox>("edit-password").Password = Secret; Find<TextBox>("edit-body").Text = "Last secret edit"; Click("hide-window"); Assert(!window.IsVisible, "not hidden"); Assert(Find<PasswordBox>("edit-password", false) == null, "secret DOM survived lock");
-                Platform.PostMessage(new WindowInteropHelper(window).Handle, showMessage, IntPtr.Zero, IntPtr.Zero); Wait(delegate { return window.IsVisible; }); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null && Find<Button>("new-item").IsEnabled; });
+                Platform.PostMessage(new WindowInteropHelper(window).Handle, showMessage, IntPtr.Zero, IntPtr.Zero); Wait(delegate { return window.IsVisible; }); Find<PasswordBox>("master-password").Password = uiPassword; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null && Find<Button>("new-item").IsEnabled; });
                 var record = Descendants(window).OfType<Button>().First(b => AutomationProperties.GetAutomationId(b).StartsWith("record-")); record.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); Assert(Find<PasswordBox>("edit-password").Password == Secret && Find<TextBox>("edit-body").Text == "Last secret edit", "UI secret mismatch"); Click("back"); Click("notes-tab");
+            });
+            Check("real password-change dialog accepts a one-character master password", delegate
+            {
+                window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)delegate
+                {
+                    Window dialog = app.Windows.Cast<Window>().First(w => w != window);
+                    DialogControl<PasswordBox>(dialog, "old-master").Password = uiPassword;
+                    DialogControl<PasswordBox>(dialog, "new-master").Password = "7";
+                    DialogControl<PasswordBox>(dialog, "repeat-master").Password = "7";
+                    DialogControl<Button>(dialog, "save-master").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                });
+                Call(window, "ShowPasswordChange"); uiPassword = "7";
+                using (var reopened = new Vault(directory)) { reopened.Unlock(uiPassword); Assert(reopened.List()[0].password == Secret, "password change dialog lost data or rejected short password"); }
             });
             Check("pressing a key captures and registers shortcut without typing text", delegate
             {
@@ -277,7 +307,7 @@ namespace SuperBrain
             });
             Check("locking the vault clears the persistent header search", delegate
             {
-                Click("vault-tab"); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item").IsEnabled; });
+                Click("vault-tab"); Find<PasswordBox>("master-password").Password = uiPassword; Click("unlock"); Wait(delegate { return Find<Button>("new-item").IsEnabled; });
                 Find<TextBox>("search").Text = "TEST account"; Click("lock-vault");
                 Assert(Find<TextBox>("search").Text == "" && !Find<TextBox>("search").IsEnabled, "locked header leaked a private search");
                 Click("notes-tab");
@@ -319,7 +349,7 @@ namespace SuperBrain
                 window = new BrainWindow(directory, showMessage, true) { ShowActivated = false }; window.Show(); Pump();
                 var unlocked = (Vault)typeof(BrainWindow).GetField("vault", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
                 Assert(!( (DispatcherTimer)typeof(BrainWindow).GetField("idleTimer", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window)).IsEnabled, "locked window keeps polling");
-                Click("vault-tab"); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item").IsEnabled; });
+                Click("vault-tab"); Find<PasswordBox>("master-password").Password = uiPassword; Click("unlock"); Wait(delegate { return Find<Button>("new-item").IsEnabled; });
                 Click("new-item"); Find<TextBox>("edit-title").Text = "Hosted final secret"; Find<PasswordBox>("edit-password").Password = Secret; Find<TextBox>("edit-body").Text = "Accepted before process exit";
                 Click("hide-window");
                 Assert(!app.Windows.Cast<Window>().Contains(window) && !unlocked.Unlocked, "hosted window or unlocked vault survived hide");
@@ -327,7 +357,7 @@ namespace SuperBrain
                 bool released = Platform.RegisterHotKey(IntPtr.Zero, 991, mods, key);
                 if (released) Platform.UnregisterHotKey(IntPtr.Zero, 991);
                 Assert(released, "hosted window retained the global shortcut after closing");
-                using (var saved = new Vault(directory)) { saved.Unlock(Password); Assert(saved.List().Any(r => r.title == "Hosted final secret" && r.password == Secret && r.body == "Accepted before process exit"), "hosted close lost accepted secret"); }
+                using (var saved = new Vault(directory)) { saved.Unlock(uiPassword); Assert(saved.List().Any(r => r.title == "Hosted final secret" && r.password == Secret && r.body == "Accepted before process exit"), "hosted close lost accepted secret"); }
                 window = null;
             });
         }

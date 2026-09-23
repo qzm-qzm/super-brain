@@ -313,7 +313,7 @@ namespace SuperBrain
             if (create)
             {
                 confirm = Identify(new PasswordBox { MaxLength = 1024 }, "confirm-password", "再次输入主密码"); Field(form, "再次输入主密码", confirm);
-                var warning = Text("至少 12 个字符，可用较长的中文短句。主密码无法找回，请另行妥善保管。", 12, true); warning.Margin = new Thickness(0, 14, 0, 6); form.Children.Add(warning);
+                var warning = Text("主密码长度由你决定，不能为空。主密码无法找回，请妥善保管。", 12, true); warning.Margin = new Thickness(0, 14, 0, 6); form.Children.Add(warning);
                 acknowledge = Identify(new CheckBox { Content = "我已了解忘记主密码将无法解密" }, "master-acknowledge", "了解主密码无法找回"); form.Children.Add(acknowledge);
             }
             var error = Text("", 12); error.SetResourceReference(TextBlock.ForegroundProperty, "Danger"); form.Children.Add(error);
