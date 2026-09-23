@@ -56,6 +56,28 @@ namespace SuperBrain
         }
         static void CoreTests()
         {
+            Check("current-user startup registration quotes paths, disables and rolls back safely", delegate
+            {
+                string keyPath = @"Software\SuperBrainLite.Tests\" + Guid.NewGuid().ToString("N");
+                string executable = Path.Combine(root, "space and 中文", "SuperBrain.exe");
+                try
+                {
+                    Assert(!StartupRegistration.IsEnabled(executable, keyPath), "startup enabled without registration");
+                    StartupRegistration.SetEnabled(true, executable, keyPath);
+                    Assert(StartupRegistration.ReadCommand(keyPath) == "\"" + executable + "\" --background", "unsafe startup command");
+                    Assert(StartupRegistration.IsEnabled(executable, keyPath), "startup not enabled");
+                    StartupRegistration.SetEnabled(false, Path.Combine(root, "other.exe"), keyPath);
+                    Assert(StartupRegistration.IsEnabled(executable, keyPath), "another copy removed registration");
+                    StartupRegistration.SetEnabled(false, executable, keyPath);
+                    Assert(!StartupRegistration.IsEnabled(executable, keyPath), "startup not disabled");
+                    StartupRegistration.SetEnabled(true, executable, keyPath);
+                    string previous = StartupRegistration.ReadCommand(keyPath), newer = Path.Combine(root, "newer.exe");
+                    StartupRegistration.SetEnabled(true, newer, keyPath);
+                    StartupRegistration.RestoreCommand(previous, StartupRegistration.Command(newer), keyPath);
+                    Assert(StartupRegistration.IsEnabled(executable, keyPath), "rollback lost original startup path");
+                }
+                finally { Microsoft.Win32.Registry.CurrentUser.DeleteSubKey(keyPath, false); }
+            });
             Check("native PBKDF2 matches .NET reference including Unicode", delegate
             {
                 var salt = Encoding.UTF8.GetBytes("known-test-salt-32-byte-long-2026!"); byte[] expected;
@@ -292,6 +314,22 @@ namespace SuperBrain
             for (int i = 0; i < samples.Length; i++) { samples[i].updatedAt = DateTime.UtcNow.AddMinutes(-i * 45).ToString("o"); previewStore.Notes.Add(samples[i]); } previewStore.SaveNotes(); Call(window, "Render"); Find<TextBox>("search").Focus();
             Pump(); var image = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32); image.Render(window); var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); using (var stream = File.Create(Path.Combine(root, "preview.png"))) encoder.Save(stream);
             Call(window, "Quit"); window = null;
+            Check("hosted hide flushes final secret, closes window and releases its shortcut", delegate
+            {
+                window = new BrainWindow(directory, showMessage, true) { ShowActivated = false }; window.Show(); Pump();
+                var unlocked = (Vault)typeof(BrainWindow).GetField("vault", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
+                Assert(!( (DispatcherTimer)typeof(BrainWindow).GetField("idleTimer", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window)).IsEnabled, "locked window keeps polling");
+                Click("vault-tab"); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item").IsEnabled; });
+                Click("new-item"); Find<TextBox>("edit-title").Text = "Hosted final secret"; Find<PasswordBox>("edit-password").Password = Secret; Find<TextBox>("edit-body").Text = "Accepted before process exit";
+                Click("hide-window");
+                Assert(!app.Windows.Cast<Window>().Contains(window) && !unlocked.Unlocked, "hosted window or unlocked vault survived hide");
+                uint mods, key; Platform.Shortcut(new LocalStore(directory).Config.shortcut, out mods, out key);
+                bool released = Platform.RegisterHotKey(IntPtr.Zero, 991, mods, key);
+                if (released) Platform.UnregisterHotKey(IntPtr.Zero, 991);
+                Assert(released, "hosted window retained the global shortcut after closing");
+                using (var saved = new Vault(directory)) { saved.Unlock(Password); Assert(saved.List().Any(r => r.title == "Hosted final secret" && r.password == Secret && r.body == "Accepted before process exit"), "hosted close lost accepted secret"); }
+                window = null;
+            });
         }
         static IEnumerable<DependencyObject> Descendants(DependencyObject parent) { yield return parent; for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++) foreach (var child in Descendants(VisualTreeHelper.GetChild(parent, i))) yield return child; }
         static T Find<T>(string id, bool required = true) where T : FrameworkElement { Pump(); var found = Descendants(window).OfType<T>().FirstOrDefault(e => AutomationProperties.GetAutomationId(e) == id); if (required && found == null) throw new Exception("Missing UI element: " + id); return found; }

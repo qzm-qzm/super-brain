@@ -7,6 +7,7 @@ $profile = Join-Path $TestRoot ([Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $profile -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $profile 'config.json'), '{"shortcut":"Ctrl+Alt+Shift+F24"}', [Text.Encoding]::UTF8)
 $application = $null
+$windowProcess = $null
 $second = $null
 function Wait-For([scriptblock]$Condition) {
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -27,7 +28,12 @@ function Invoke-Control([string]$Id) {
 }
 try {
     $application = Start-Process -FilePath $binary -ArgumentList ('--data-dir "{0}"' -f $profile) -WindowStyle Hidden -PassThru
-    $processCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, $application.Id)
+    $windowProcess = Wait-For {
+        $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($application.Id)" | Select-Object -First 1
+        if ($null -ne $child) { return Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue }
+        return $null
+    }
+    $processCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, $windowProcess.Id)
     $script:window = Wait-For { [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, $processCondition) }
     Invoke-Control 'new-item'
     (Wait-For { Find-Control 'edit-title' }).GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue('Standalone executable smoke')
@@ -42,7 +48,8 @@ try {
     $second = Start-Process -FilePath $binary -ArgumentList ('--data-dir "{0}"' -f $profile) -WindowStyle Hidden -PassThru
     if (-not $second.WaitForExit(5000) -or $second.ExitCode -ne 0) { throw 'Second-instance activation failed.' }
     $application.Refresh()
-    $memory = [Math]::Round($application.WorkingSet64 / 1MB, 1)
+    $windowProcess.Refresh()
+    $memory = [Math]::Round(($application.WorkingSet64 + $windowProcess.WorkingSet64) / 1MB, 1)
     Invoke-Control 'settings'
     $dialog = Wait-For {
         $roots = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $processCondition)
@@ -60,5 +67,6 @@ try {
     $result | ConvertTo-Json -Depth 3
 } finally {
     if ($null -ne $second -and -not $second.HasExited) { Stop-Process -Id $second.Id -Force }
+    if ($null -ne $windowProcess -and -not $windowProcess.HasExited) { Stop-Process -Id $windowProcess.Id -Force }
     if ($null -ne $application -and -not $application.HasExited) { Stop-Process -Id $application.Id -Force }
 }

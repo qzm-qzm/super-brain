@@ -101,6 +101,9 @@ namespace SuperBrain
             var hotkey = Identify(new TextBox { Text = config.shortcut, MaxLength = 60, IsReadOnly = true, IsReadOnlyCaretVisible = false, Cursor = Cursors.Hand }, "setting-shortcut", "点击后按键设置全局快捷键");
             Field(body, "呼出 / 收起快捷键", hotkey);
             var captureHelp = Text("点击上方输入框，然后直接按想绑定的键。", 11, true); body.Children.Add(captureHelp);
+            bool startupEnabled = StartupRegistration.IsEnabled(StartupRegistration.Executable);
+            var startup = Identify(new CheckBox { Content = "登录 Windows 后后台启动", IsChecked = startupEnabled }, "setting-startup", "登录 Windows 后后台启动"); body.Children.Add(startup);
+            body.Children.Add(Text("开机不弹窗口，按快捷键打开；收起后释放窗口内存。", 11, true));
             var topmost = Identify(new CheckBox { Content = "窗口始终置顶", IsChecked = config.alwaysOnTop }, "setting-topmost", "窗口始终置顶"); body.Children.Add(topmost);
             var timeout = Identify(new ComboBox { ItemsSource = new[] { 1, 5, 10, 15, 30 }, SelectedItem = config.autoLockMinutes, Padding = new Thickness(8), FontSize = 14 }, "setting-timeout", "闲置锁定分钟数"); Field(body, "闲置多少分钟后锁定密码库", timeout);
             body.Children.Add(Text("收起窗口、锁屏或休眠时也会锁定。", 11, true));
@@ -142,7 +145,18 @@ namespace SuperBrain
                 {
                     var next = JsonFile.Clone(config); next.shortcut = hotkey.Text.Trim(); next.alwaysOnTop = topmost.IsChecked == true; next.autoLockMinutes = (int)timeout.SelectedItem; next.Validate(); string oldShortcut = config.shortcut; bool changed = !String.Equals(next.shortcut, oldShortcut, StringComparison.OrdinalIgnoreCase);
                     if (changed) SetShortcut(next.shortcut);
-                    try { store.SaveConfig(next); } catch { if (changed) SetShortcut(oldShortcut); throw; }
+                    bool changeStartup = (startup.IsChecked == true) != startupEnabled;
+                    string previousStartupCommand = StartupRegistration.ReadCommand();
+                    try
+                    {
+                        if (changeStartup) StartupRegistration.SetEnabled(startup.IsChecked == true, StartupRegistration.Executable);
+                        store.SaveConfig(next);
+                    }
+                    catch
+                    {
+                        if (changeStartup) StartupRegistration.RestoreCommand(previousStartupCommand, startup.IsChecked == true ? StartupRegistration.Command(StartupRegistration.Executable) : null);
+                        if (changed) SetShortcut(oldShortcut); throw;
+                    }
                     config = next; configDirty = false; ApplyTheme(); if (tray != null) tray.Text = "超强大脑 · " + config.shortcut; dialog.Close(); Render();
                 }
                 catch (Exception e) { error.Text = e.Message; }

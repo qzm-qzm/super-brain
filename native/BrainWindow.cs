@@ -28,6 +28,8 @@ namespace SuperBrain
         readonly Vault vault;
         Preferences config;
         readonly uint showMessage;
+        readonly bool hosted;
+        readonly uint closeWindowMessage, exitHostMessage, lockMessage;
         readonly Grid content = new Grid();
         readonly Image wallpaper = new Image { Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
         readonly TextBlock status = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
@@ -50,9 +52,13 @@ namespace SuperBrain
         TextBlock searchPlaceholder;
         Window activeDialog;
 
-        public BrainWindow(string directory, uint showMessage)
+        public BrainWindow(string directory, uint showMessage, bool hosted = false)
         {
-            this.showMessage = showMessage; store = new LocalStore(directory); vault = new Vault(directory); config = JsonFile.Clone(store.Config);
+            this.showMessage = showMessage; this.hosted = hosted;
+            closeWindowMessage = Platform.RegisterWindowMessage("SuperBrainLite.CloseWindow." + Platform.Identity(directory));
+            exitHostMessage = Platform.RegisterWindowMessage("SuperBrainLite.ExitHost." + Platform.Identity(directory));
+            lockMessage = Platform.RegisterWindowMessage("SuperBrainLite.Lock." + Platform.Identity(directory));
+            store = new LocalStore(directory); vault = new Vault(directory); config = JsonFile.Clone(store.Config);
             using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("SuperBrain.Theme.xaml")) Resources.MergedDictionaries.Add((ResourceDictionary)XamlReader.Load(stream));
             Title = "超强大脑"; Width = config.windowWidth; Height = config.windowHeight; MinWidth = 400; MinHeight = 560; WindowStartupLocation = WindowStartupLocation.CenterScreen;
             if (config.windowLeft.HasValue) RestoreWindowPlacement();
@@ -67,7 +73,7 @@ namespace SuperBrain
             clipboardTimer.Tick += delegate { ClearClipboard(); };
             PreviewKeyDown += OnKeyDown; PreviewMouseDown += delegate { activityAt = DateTime.UtcNow; };
             SourceInitialized += delegate { handle = new WindowInteropHelper(this).Handle; source = HwndSource.FromHwnd(handle); source.AddHook(Message); Platform.RoundCorners(handle); try { SetShortcut(config.shortcut); } catch (Exception e) { Notice(e.Message); } };
-            Loaded += delegate { WindowStartupLocation = WindowStartupLocation.Manual; LocationChanged += delegate { SaveWindowPlacement(); }; SizeChanged += delegate { SaveWindowPlacement(); }; SetupTray(); idleTimer.Start(); Try(delegate { store.SaveConfig(config); }); };
+            Loaded += delegate { WindowStartupLocation = WindowStartupLocation.Manual; LocationChanged += delegate { SaveWindowPlacement(); }; SizeChanged += delegate { SaveWindowPlacement(); }; if (!hosted) SetupTray(); Try(delegate { store.SaveConfig(config); }); if (hosted) Platform.PostMessage(new IntPtr(0xffff), Platform.RegisterWindowMessage("SuperBrainLite.Ready." + Platform.Identity(directory)), IntPtr.Zero, IntPtr.Zero); };
             Closing += OnClosing;
             StateChanged += delegate { if (WindowState == WindowState.Minimized) { WindowState = WindowState.Normal; HideToTray(); } };
             SystemEvents.SessionSwitch += SessionSwitch; SystemEvents.PowerModeChanged += PowerChanged;
@@ -317,7 +323,7 @@ namespace SuperBrain
                 if (busy) return; string pass = password.Password;
                 if (create && (confirm.Password != pass || acknowledge.IsChecked != true)) { error.Text = "请确认两次主密码一致，并勾选提示。"; return; }
                 busy = true; submit.IsEnabled = false; submit.Content = "正在处理…"; error.Text = "";
-                try { await Task.Run(delegate { if (create) vault.Setup(pass); else vault.Unlock(pass); }); password.Clear(); if (confirm != null) confirm.Clear(); activityAt = DateTime.UtcNow; if (vault.Unlocked) { editing = false; Render(); } }
+                try { await Task.Run(delegate { if (create) vault.Setup(pass); else vault.Unlock(pass); }); password.Clear(); if (confirm != null) confirm.Clear(); activityAt = DateTime.UtcNow; if (vault.Unlocked) { idleTimer.Start(); editing = false; Render(); } }
                 catch (Exception e) { password.Clear(); error.Text = e.Message; }
                 finally { busy = false; submit.IsEnabled = true; submit.Content = create ? "创建密码库" : "解锁"; UpdateNavigation(); }
             };
@@ -325,17 +331,22 @@ namespace SuperBrain
         }
         void LockVault()
         {
-            vault.Lock(); current = secretTab ? null : current; deleted = null; ClearClipboard();
+            vault.Lock(); idleTimer.Stop(); current = secretTab ? null : current; deleted = null; ClearClipboard();
             if (activeDialog != null) activeDialog.Close();
             if (secretTab) { editing = false; query = ""; favoritesOnly = false; Render(); } Notice("密码库已锁定"); Try(delegate { vault.Flush(); });
         }
-        void HideToTray() { SavePending(); LockVault(); Hide(); }
+        void HideToTray() { SavePending(); LockVault(); if (hosted) { exiting = true; Close(); } else Hide(); }
         void Reveal() { Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate(); activityAt = DateTime.UtcNow; }
         void Toggle() { if (IsVisible && IsActive) Try(HideToTray); else Reveal(); }
-        void Quit() { SavePending(); LockVault(); exiting = true; Close(); }
+        void Quit() { SavePending(); LockVault(); exiting = true; if (hosted) Platform.PostMessage(new IntPtr(0xffff), exitHostMessage, IntPtr.Zero, IntPtr.Zero); Close(); }
         void OnClosing(object sender, CancelEventArgs e)
         {
-            if (!exiting) { e.Cancel = true; Try(HideToTray); return; }
+            if (!exiting)
+            {
+                if (!hosted) { e.Cancel = true; Try(HideToTray); return; }
+                try { SavePending(); LockVault(); exiting = true; }
+                catch (Exception error) { e.Cancel = true; Notice(error.Message, true); return; }
+            }
             idleTimer.Stop(); saveTimer.Stop(); ClearClipboard(); vault.Dispose();
             if (handle != IntPtr.Zero) Platform.UnregisterHotKey(handle, hotkeyId); if (source != null) source.RemoveHook(Message);
             if (tray != null) { tray.Visible = false; tray.Dispose(); } SystemEvents.SessionSwitch -= SessionSwitch; SystemEvents.PowerModeChanged -= PowerChanged;
@@ -353,6 +364,8 @@ namespace SuperBrain
         IntPtr Message(IntPtr window, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
             if (message == 0x312 && wParam.ToInt32() == hotkeyId) { handled = true; Toggle(); }
+            if ((uint)message == closeWindowMessage) { handled = true; Try(Quit); }
+            if ((uint)message == lockMessage) { handled = true; Try(LockVault); }
             if ((uint)message == showMessage) { handled = true; Reveal(); } return IntPtr.Zero;
         }
         void SetShortcut(string shortcut)

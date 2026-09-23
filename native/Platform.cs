@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -14,14 +15,14 @@ using System.Windows.Interop;
 [assembly: AssemblyDescription("超强大脑轻量版 · 双击即用")]
 [assembly: AssemblyCompany("qzm-qzm")]
 [assembly: AssemblyProduct("超强大脑")]
-[assembly: AssemblyVersion("0.2.3.0")]
-[assembly: AssemblyFileVersion("0.2.3.0")]
+[assembly: AssemblyVersion("0.2.4.0")]
+[assembly: AssemblyFileVersion("0.2.4.0")]
 
 namespace SuperBrain
 {
     public static class Platform
     {
-        public const string Version = "0.2.3";
+        public const string Version = "0.2.4";
         public const string Repository = "https://github.com/qzm-qzm/super-brain";
         [DllImport("user32.dll", SetLastError = true)] public static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
         [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr window, int id);
@@ -78,20 +79,43 @@ namespace SuperBrain
         public static int Main(string[] args)
         {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
+            bool background = false, hosted = false;
+            foreach (string arg in args) { if (arg == "--background") background = true; if (arg == "--hosted-window") hosted = true; }
             for (int i = 0; i + 1 < args.Length; i++) if (args[i] == "--data-dir") directory = Path.GetFullPath(args[++i]);
+            foreach (string arg in args)
+            {
+                if (arg != "--enable-startup" && arg != "--disable-startup") continue;
+                try { StartupRegistration.SetEnabled(arg == "--enable-startup", StartupRegistration.Executable); return 0; }
+                catch { return 1; }
+            }
             bool acquired;
-            using (var mutex = new Mutex(true, "Local\\SuperBrainLite-" + Platform.Identity(directory), out acquired))
+            using (var mutex = new Mutex(true, "Local\\SuperBrainLite-" + Platform.Identity(directory) + (hosted ? ".Window" : ""), out acquired))
             {
                 uint showMessage = Platform.RegisterWindowMessage("SuperBrainLite.Show." + Platform.Identity(directory));
-                if (!acquired) { Platform.PostMessage(new IntPtr(0xffff), showMessage, IntPtr.Zero, IntPtr.Zero); return 0; }
+                if (!acquired) { if (!background) Platform.PostMessage(new IntPtr(0xffff), showMessage, new IntPtr(hosted ? 1 : 0), IntPtr.Zero); return 0; }
                 try
                 {
-                    var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-                    var window = new BrainWindow(directory, showMessage); app.Run(window); return 0;
+                    if (hosted) DesktopRunner.Run(directory, showMessage, true); else RunBackground(directory, showMessage, !background);
+                    return 0;
                 }
-                catch (Exception e) { MessageBox.Show("无法打开超强大脑：\n" + e.Message + "\n\n请把文件放在可写的文件夹中，例如 D:\\super-brain。已有资料不会自动清空。", "超强大脑", MessageBoxButton.OK, MessageBoxImage.Error); return 1; }
+                catch (Exception e) { System.Windows.Forms.MessageBox.Show("无法打开超强大脑：\n" + e.Message + "\n\n请把文件放在可写的文件夹中，例如 D:\\super-brain。已有资料不会自动清空。", "超强大脑", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error); return 1; }
                 finally { mutex.ReleaseMutex(); }
             }
+        }
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void RunBackground(string directory, uint showMessage, bool openImmediately)
+        {
+            using (var host = new BackgroundHost(directory, showMessage, openImmediately)) System.Windows.Forms.Application.Run(host);
+        }
+    }
+    static class DesktopRunner
+    {
+        // Keep WPF types out of Program.Main's JIT path for the idle process.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static void Run(string directory, uint showMessage, bool hosted)
+        {
+            var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+            var window = new BrainWindow(directory, showMessage, hosted); app.Run(window);
         }
     }
 }
