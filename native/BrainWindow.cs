@@ -52,10 +52,11 @@ namespace SuperBrain
         {
             this.showMessage = showMessage; store = new LocalStore(directory); vault = new Vault(directory); config = JsonFile.Clone(store.Config);
             using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("SuperBrain.Theme.xaml")) Resources.MergedDictionaries.Add((ResourceDictionary)XamlReader.Load(stream));
-            Title = "超强大脑"; Width = 480; Height = 720; MinWidth = 400; MinHeight = 560; WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            Title = "超强大脑"; Width = config.windowWidth; Height = config.windowHeight; MinWidth = 400; MinHeight = 560; WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            if (config.windowLeft.HasValue) RestoreWindowPlacement();
             FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"); FontSize = 13; WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResize;
             SetResourceReference(BackgroundProperty, "Paper"); SetResourceReference(ForegroundProperty, "Ink");
-            WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight = 0, ResizeBorderThickness = new Thickness(5), GlassFrameThickness = new Thickness(0), CornerRadius = new CornerRadius(12) });
+            WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight = 88, ResizeBorderThickness = new Thickness(6), GlassFrameThickness = new Thickness(0), CornerRadius = new CornerRadius(14) });
             using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("SuperBrain.icon.png")) Icon = BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
             BuildShell(); ApplyTheme(); Render();
             saveTimer.Tick += delegate { saveTimer.Stop(); Try(SavePending); };
@@ -63,7 +64,7 @@ namespace SuperBrain
             clipboardTimer.Tick += delegate { ClearClipboard(); };
             PreviewKeyDown += OnKeyDown; PreviewMouseDown += delegate { activityAt = DateTime.UtcNow; };
             SourceInitialized += delegate { handle = new WindowInteropHelper(this).Handle; source = HwndSource.FromHwnd(handle); source.AddHook(Message); Platform.RoundCorners(handle); try { SetShortcut(config.shortcut); } catch (Exception e) { Notice(e.Message); } };
-            Loaded += delegate { SetupTray(); idleTimer.Start(); Try(delegate { store.SaveConfig(config); }); };
+            Loaded += delegate { WindowStartupLocation = WindowStartupLocation.Manual; LocationChanged += delegate { SaveWindowPlacement(); }; SizeChanged += delegate { SaveWindowPlacement(); }; SetupTray(); idleTimer.Start(); Try(delegate { store.SaveConfig(config); }); };
             Closing += OnClosing;
             StateChanged += delegate { if (WindowState == WindowState.Minimized) { WindowState = WindowState.Normal; HideToTray(); } };
             SystemEvents.SessionSwitch += SessionSwitch; SystemEvents.PowerModeChanged += PowerChanged;
@@ -71,25 +72,42 @@ namespace SuperBrain
         void BuildShell()
         {
             var root = new Grid(); root.Children.Add(wallpaper);
-            var layout = new Grid { Margin = new Thickness(22, 18, 22, 12) };
+            var layout = new Grid { Margin = new Thickness(16, 16, 16, 12) };
             layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition()); layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var header = new DockPanel { Margin = new Thickness(0, 0, 0, 18) };
-            header.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e) { if (e.ClickCount == 1 && !HasButtonAncestor(e.OriginalSource as DependencyObject)) try { DragMove(); } catch (InvalidOperationException) { } };
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; DockPanel.SetDock(actions, Dock.Right);
+            var header = new DockPanel();
+            var actions = Identify(new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }, "window-actions", "窗口操作按钮"); DockPanel.SetDock(actions, Dock.Right);
             actions.Children.Add(IconButton("\uE790", "外观设置", "appearance", ShowAppearance));
             actions.Children.Add(IconButton("\uE72E", "锁定密码库", "lock-vault", LockVault));
-            actions.Children.Add(IconButton("\uE711", "收起到托盘", "hide-window", HideToTray)); header.Children.Add(actions);
-            var brand = new StackPanel(); brand.Children.Add(Text("超强大脑", 23, false, true)); brand.Children.Add(Text("随手记，随时找。", 12, true)); header.Children.Add(brand); layout.Children.Add(header);
-            Grid.SetRow(content, 1); layout.Children.Add(content);
-            var footer = new DockPanel { Margin = new Thickness(0, 12, 0, 0), LastChildFill = true };
+            actions.Children.Add(IconButton("\uE711", "收起到托盘", "hide-window", HideToTray)); WindowChrome.SetIsHitTestVisibleInChrome(actions, true); header.Children.Add(actions);
+            var brand = Identify(new StackPanel { Cursor = Cursors.SizeAll, ToolTip = "按住标题拖动窗口" }, "window-drag-region", "拖动窗口"); brand.Children.Add(Text("超强大脑", 23, false, true)); brand.Children.Add(Text("随手记，随时找。", 12, true)); header.Children.Add(brand);
+            var headerFrame = new Border { Child = header, CornerRadius = new CornerRadius(14), Padding = new Thickness(16, 11, 12, 11), Margin = new Thickness(0, 0, 0, 12), BorderThickness = new Thickness(1) }; headerFrame.SetResourceReference(Border.BackgroundProperty, "Panel"); headerFrame.SetResourceReference(Border.BorderBrushProperty, "Line"); layout.Children.Add(headerFrame);
+            var contentFrame = new Border { Child = content, CornerRadius = new CornerRadius(14), Padding = new Thickness(15, 15, 15, 12), BorderThickness = new Thickness(1) }; contentFrame.SetResourceReference(Border.BackgroundProperty, "Panel"); contentFrame.SetResourceReference(Border.BorderBrushProperty, "Line"); Grid.SetRow(contentFrame, 1); layout.Children.Add(contentFrame);
+            var footer = new DockPanel { LastChildFill = true };
             var settings = Button("设置", "settings", ShowSettings); settings.Padding = new Thickness(8, 5, 8, 5); DockPanel.SetDock(settings, Dock.Right); footer.Children.Add(settings);
             shortcutHint.Margin = new Thickness(8, 0, 8, 0); shortcutHint.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); DockPanel.SetDock(shortcutHint, Dock.Right); footer.Children.Add(shortcutHint);
             retry = Button("重试保存", "retry-save", SavePending); retry.Visibility = Visibility.Collapsed; DockPanel.SetDock(retry, Dock.Right); footer.Children.Add(retry);
             status.TextTrimming = TextTrimming.CharacterEllipsis; status.TextWrapping = TextWrapping.NoWrap; status.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); footer.Children.Add(status);
-            var footBorder = new Border { BorderThickness = new Thickness(0, 1, 0, 0), Child = footer }; footBorder.SetResourceReference(Border.BorderBrushProperty, "Line"); Grid.SetRow(footBorder, 2); layout.Children.Add(footBorder);
+            var footBorder = new Border { Child = footer, CornerRadius = new CornerRadius(12), Padding = new Thickness(9, 5, 9, 5), Margin = new Thickness(0, 12, 0, 0), BorderThickness = new Thickness(1) }; footBorder.SetResourceReference(Border.BackgroundProperty, "Panel"); footBorder.SetResourceReference(Border.BorderBrushProperty, "Line"); Grid.SetRow(footBorder, 2); layout.Children.Add(footBorder);
             root.Children.Add(layout); Content = root;
         }
-        static bool HasButtonAncestor(DependencyObject source) { while (source != null) { if (source is Button) return true; source = VisualTreeHelper.GetParent(source); } return false; }
+        void RestoreWindowPlacement()
+        {
+            double left = config.windowLeft.Value, top = config.windowTop.Value;
+            double screenLeft = SystemParameters.VirtualScreenLeft, screenTop = SystemParameters.VirtualScreenTop;
+            double screenRight = screenLeft + SystemParameters.VirtualScreenWidth, screenBottom = screenTop + SystemParameters.VirtualScreenHeight;
+            if (left + Width < screenLeft + 120 || left > screenRight - 120 || top + 80 < screenTop || top > screenBottom - 80)
+            {
+                var work = SystemParameters.WorkArea; left = work.Left + (work.Width - Width) / 2; top = work.Top + (work.Height - Height) / 2;
+            }
+            Left = Math.Max(screenLeft - Width + 120, Math.Min(left, screenRight - 120));
+            Top = Math.Max(screenTop, Math.Min(top, screenBottom - 80)); WindowStartupLocation = WindowStartupLocation.Manual;
+        }
+        void SaveWindowPlacement()
+        {
+            if (!IsLoaded || !IsVisible || WindowState != WindowState.Normal || Double.IsNaN(Left) || Double.IsNaN(Top)) return;
+            config.windowLeft = Left; config.windowTop = Top; config.windowWidth = ActualWidth; config.windowHeight = ActualHeight;
+            configDirty = true; saveTimer.Stop(); saveTimer.Start();
+        }
         public static T Identify<T>(T control, string id, string name) where T : FrameworkElement { AutomationProperties.SetAutomationId(control, id); AutomationProperties.SetName(control, name); return control; }
         TextBlock Text(string value, double size = 13, bool muted = false, bool strong = false)
         {
@@ -129,8 +147,8 @@ namespace SuperBrain
             var layout = new Grid(); layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition());
             var tabs = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 16) };
             notesTab = Button("备忘录  " + store.Notes.Count, "notes-tab", delegate { SwitchTab(false); }); passwordsTab = Button("账号密码", "vault-tab", delegate { SwitchTab(true); });
-            notesTab.FontWeight = !secretTab ? FontWeights.SemiBold : FontWeights.Normal; passwordsTab.FontWeight = secretTab ? FontWeights.SemiBold : FontWeights.Normal;
-            (secretTab ? passwordsTab : notesTab).SetResourceReference(Control.BorderBrushProperty, "Accent"); tabs.Children.Add(notesTab); tabs.Children.Add(passwordsTab); layout.Children.Add(tabs);
+            notesTab.Margin = new Thickness(0, 0, 8, 0);
+            (secretTab ? passwordsTab : notesTab).SetResourceReference(StyleProperty, "ActiveTab"); tabs.Children.Add(notesTab); tabs.Children.Add(passwordsTab); layout.Children.Add(tabs);
             if (secretTab && !vault.Unlocked) { var locked = UnlockForm(); Grid.SetRow(locked, 1); Grid.SetRowSpan(locked, 2); layout.Children.Add(locked); Notice("密码库已锁定"); }
             else
             {
@@ -155,7 +173,7 @@ namespace SuperBrain
                 var titleLine = new DockPanel(); var date = Text(DateLabel(item.updatedAt), 11, true); date.Margin = new Thickness(10, 3, 0, 3); DockPanel.SetDock(date, Dock.Right); titleLine.Children.Add(date);
                 var title = Text(String.IsNullOrEmpty(item.title) ? "未命名" : item.title, 15, false, true); title.TextWrapping = TextWrapping.NoWrap; title.TextTrimming = TextTrimming.CharacterEllipsis; titleLine.Children.Add(title); row.Children.Add(titleLine);
                 string preview = secretTab ? item.username : item.body.Replace("\r", " ").Replace("\n", " "); var summary = Text(String.IsNullOrEmpty(preview) ? "写一点什么…" : preview, 12, true); summary.TextWrapping = TextWrapping.NoWrap; summary.TextTrimming = TextTrimming.CharacterEllipsis; Grid.SetRow(summary, 1); row.Children.Add(summary);
-                var open = Button("打开记录", "record-" + item.id, delegate { OpenRecord(item.id); }); AutomationProperties.SetName(open, "打开 " + title.Text); open.Content = row; open.HorizontalContentAlignment = HorizontalAlignment.Stretch; open.Padding = new Thickness(12, 13, 12, 13); open.Margin = new Thickness(0, 0, 0, 3); rows.Children.Add(open);
+                var open = Button("打开记录", "record-" + item.id, delegate { OpenRecord(item.id); }); AutomationProperties.SetName(open, "打开 " + title.Text); open.Content = row; open.HorizontalContentAlignment = HorizontalAlignment.Stretch; open.Padding = new Thickness(14, 14, 14, 14); open.Margin = new Thickness(0, 0, 0, 7); rows.Children.Add(open);
             }
             if (filtered.Count == 0) { var empty = new StackPanel { Margin = new Thickness(12, 55, 12, 20) }; empty.Children.Add(Text(query.Length > 0 ? "没有找到相关内容" : secretTab ? "添加你的第一个账号" : "把重要的事，先记下来。", 19, false, true)); empty.Children.Add(Text(query.Length > 0 ? "换个关键词试试。" : "一个想法，一件小事，都可以放在这里。", 13, true)); rows.Children.Add(empty); }
             Notice(records.Count + (secretTab ? " 条账号 · 已解锁" : " 条备忘录"));

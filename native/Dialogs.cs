@@ -29,7 +29,12 @@ namespace SuperBrain
             var bg = ColorOf(config.background); bool dark = Contrast(Colors.White, bg) > Contrast(Colors.Black, bg); var ink = dark ? Colors.White : ColorOf("#18212D"); var accent = Legible(ColorOf(config.accent), bg, 5.0);
             Brush("Paper", bg); Brush("Ink", Legible(ink, bg, 12)); Brush("Muted", Legible(Mix(bg, ink, .68), bg, 6)); Brush("Accent", accent);
             Brush("OnAccent", Contrast(Colors.White, accent) > Contrast(Colors.Black, accent) ? Colors.White : Colors.Black);
-            Brush("Surface", Mix(bg, dark ? Colors.Black : Colors.White, .14)); Brush("Line", Mix(bg, ink, .18)); Brush("Control", Legible(Mix(bg, ink, .4), bg, 3)); Brush("Hover", Mix(bg, ink, .07)); Brush("Danger", Legible(ColorOf("#B03131"), bg, 5));
+            var surface = Mix(bg, Colors.White, dark ? .09 : .78);
+            Brush("Surface", surface);
+            var panel = Mix(bg, dark ? Colors.Black : Colors.White, dark ? .10 : .42);
+            Brush("Panel", Color.FromArgb(226, panel.R, panel.G, panel.B));
+            Brush("Selected", Mix(bg, accent, dark ? .24 : .13));
+            Brush("Line", Mix(bg, ink, dark ? .27 : .20)); Brush("Control", Legible(Mix(bg, ink, .4), bg, 3)); Brush("Hover", Mix(bg, ink, .07)); Brush("Danger", Legible(ColorOf("#B03131"), bg, 5));
             wallpaper.Opacity = 1 - config.imageTransparency / 100.0; Topmost = config.alwaysOnTop;
             if (config.image == cachedImage) return; cachedImage = config.image;
             if (String.IsNullOrEmpty(config.image)) wallpaper.Source = null;

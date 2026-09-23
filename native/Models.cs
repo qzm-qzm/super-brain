@@ -18,12 +18,17 @@ namespace SuperBrain
         public string shortcut { get; set; }
         public int autoLockMinutes { get; set; }
         public bool alwaysOnTop { get; set; }
-        public Preferences() { background = "#F6F8FB"; accent = "#48648E"; image = ""; imageTransparency = 90; shortcut = "F8"; autoLockMinutes = 5; }
+        public double? windowLeft { get; set; }
+        public double? windowTop { get; set; }
+        public double windowWidth { get; set; }
+        public double windowHeight { get; set; }
+        public Preferences() { background = "#F6F8FB"; accent = "#48648E"; image = ""; imageTransparency = 90; shortcut = "F8"; autoLockMinutes = 5; windowWidth = 480; windowHeight = 720; }
         public void Validate()
         {
             if (!Regex.IsMatch(background ?? "", "^#[0-9a-fA-F]{6}$") || !Regex.IsMatch(accent ?? "", "^#[0-9a-fA-F]{6}$")) throw new Exception("颜色应为六位色值，例如 #F6F8FB。");
             if (image == null || image.Length > 2900000 || (image.Length > 0 && !Regex.IsMatch(image, @"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$"))) throw new Exception("背景图片格式不正确或超过 2 MB。");
             if (imageTransparency < 0 || imageTransparency > 100) throw new Exception("图片透明度应为 0–100。");
+            if (windowLeft.HasValue != windowTop.HasValue || (windowLeft.HasValue && (Double.IsNaN(windowLeft.Value) || Double.IsInfinity(windowLeft.Value) || Math.Abs(windowLeft.Value) > 100000 || Double.IsNaN(windowTop.Value) || Double.IsInfinity(windowTop.Value) || Math.Abs(windowTop.Value) > 100000)) || Double.IsNaN(windowWidth) || Double.IsInfinity(windowWidth) || windowWidth < 400 || windowWidth > 4000 || Double.IsNaN(windowHeight) || Double.IsInfinity(windowHeight) || windowHeight < 560 || windowHeight > 4000) throw new Exception("窗口位置或尺寸不正确。");
             if (!(new[] { 1, 5, 10, 15, 30 }).Contains(autoLockMinutes)) throw new Exception("自动锁定时间不正确。");
             if (!Regex.IsMatch(shortcut ?? "", @"^(?:(?:Ctrl|Control|Alt|Shift|Win)\+){0,3}(?:[A-Z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Space)$", RegexOptions.IgnoreCase) || (!shortcut.Contains("+") && !Regex.IsMatch(shortcut, @"^F(?:[1-9]|1[0-9]|2[0-4])$", RegexOptions.IgnoreCase))) throw new Exception("快捷键请使用 F8，或 Ctrl+Alt+Q 这样的组合键。");
         }

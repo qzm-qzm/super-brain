@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -15,6 +16,7 @@ using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Shell;
 using System.Windows.Threading;
 
 namespace SuperBrain
@@ -27,6 +29,13 @@ namespace SuperBrain
         static int passed;
         static Application app;
         static BrainWindow window;
+        [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr handle, uint message, IntPtr wParam, IntPtr lParam);
+        static int HitTest(FrameworkElement element)
+        {
+            Point screen = element.PointToScreen(new Point(element.ActualWidth / 2, element.ActualHeight / 2));
+            int packed = unchecked((((int)screen.Y & 0xffff) << 16) | ((int)screen.X & 0xffff));
+            return SendMessage(new WindowInteropHelper(window).Handle, 0x84, IntPtr.Zero, new IntPtr(packed)).ToInt32();
+        }
         static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
         static void Throws(Action action, string message) { bool rejected = false; try { action(); } catch { rejected = true; } Assert(rejected, message); }
         static string DirectoryFor(string name) { string directory = Path.Combine(root, name); Directory.CreateDirectory(directory); return directory; }
@@ -63,6 +72,8 @@ namespace SuperBrain
             {
                 string dir = DirectoryFor("corrupt"); File.WriteAllText(Path.Combine(dir, "notes.json"), "bad JSON"); Throws(delegate { new LocalStore(dir); }, "corrupt data accepted"); Assert(File.ReadAllText(Path.Combine(dir, "notes.json")) == "bad JSON", "corrupt file replaced");
                 Throws(delegate { new Preferences { imageTransparency = 101 }.Validate(); }, "invalid transparency"); Throws(delegate { new Preferences { shortcut = "Q" }.Validate(); }, "invalid hotkey");
+                var oldConfig = JsonFile.Decode<Preferences>("{\"shortcut\":\"F8\"}"); oldConfig.Validate(); Assert(oldConfig.windowWidth == 480 && oldConfig.windowHeight == 720, "old configuration lost default window size");
+                Throws(delegate { new Preferences { windowWidth = 100 }.Validate(); }, "invalid window size accepted");
                 uint a, b; Throws(delegate { Platform.Shortcut("Ctrl+Ctrl+Q", out a, out b); }, "duplicate modifier");
                 Assert(Platform.CapturedShortcut(Key.F8, ModifierKeys.None) == "F8", "single function key capture");
                 Assert(Platform.CapturedShortcut(Key.F24, ModifierKeys.None) == "F24", "highest function key capture");
@@ -131,6 +142,17 @@ namespace SuperBrain
             app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown }; SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext()); string directory = DirectoryFor("ui"); var setup = new LocalStore(directory); setup.SaveConfig(new Preferences { shortcut = "Ctrl+Alt+Shift+F24" });
             uint showMessage = Platform.RegisterWindowMessage("SuperBrainLite.Test." + Guid.NewGuid().ToString("N"));
             window = new BrainWindow(directory, showMessage) { ShowActivated = false }; window.Show(); Pump();
+            Check("native title drag area and window position survive restart", delegate
+            {
+                Assert(WindowChrome.GetWindowChrome(window).CaptionHeight >= 80, "window title cannot be dragged");
+                Assert(WindowChrome.GetIsHitTestVisibleInChrome(Find<StackPanel>("window-actions")), "title buttons blocked by drag area");
+                Assert(HitTest(Find<StackPanel>("window-drag-region")) == 2, "title does not hit test as draggable caption");
+                Assert(HitTest(Find<Button>("appearance")) == 1, "title action cannot be clicked");
+                window.Left += 45; window.Top += 30; window.Width = 500; window.Height = 680; Pump(); Call(window, "SavePending");
+                var position = new LocalStore(directory).Config;
+                Assert(Math.Abs(position.windowLeft.Value - window.Left) < 2 && Math.Abs(position.windowTop.Value - window.Top) < 2, "window position was not saved");
+                Assert(Math.Abs(position.windowWidth - window.ActualWidth) < 2 && Math.Abs(position.windowHeight - window.ActualHeight) < 2, "window size was not saved");
+            });
             Check("real WPF note edit, native close flush and reveal message", delegate
             {
                 Click("new-item"); Find<TextBox>("edit-title").Text = "随时记下灵感"; Find<TextBox>("edit-body").Text = "按 F8 呼出小窗，写完就收起来。";
@@ -198,7 +220,7 @@ namespace SuperBrain
             Check("appearance changes persist and transparency is independent", delegate
             {
                 var imageConfig = (Preferences)typeof(BrainWindow).GetField("config", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
-                var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, new byte[] { 200, 140, 80, 255 }, 4)));
+                var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(BitmapSource.Create(2, 2, 96, 96, PixelFormats.Bgra32, null, new byte[] { 0, 0, 0, 255, 255, 255, 255, 255, 20, 70, 220, 255, 210, 90, 20, 255 }, 8)));
                 using (var bytes = new MemoryStream()) { png.Save(bytes); imageConfig.image = "data:image/png;base64," + Convert.ToBase64String(bytes.ToArray()); }
                 Call(window, "AppearanceChanged");
                 var openAppearance = Find<Button>("appearance");
@@ -210,10 +232,25 @@ namespace SuperBrain
                 });
                 openAppearance.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); var saved = new LocalStore(directory); Assert(saved.Config.image.StartsWith("data:image/png;base64,") && Descendants(window).OfType<Image>().Any(i => i.Source != null && Math.Abs(i.Opacity - .63) < .001), "background image opacity mismatch");
                 Assert(saved.Config.background == "#20242C" && saved.Config.imageTransparency == 37 && saved.Config.shortcut == "F9", "appearance not persisted");
+                var panel = ((SolidColorBrush)window.Resources["Panel"]).Color;
+                var card = ((SolidColorBrush)Find<Button>("settings").Background).Color;
+                Assert(panel.A >= 220 && card.A == 255, "wallpaper makes controls transparent");
+                var photo = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+                photo.Render(window); var photoPng = new PngBitmapEncoder(); photoPng.Frames.Add(BitmapFrame.Create(photo));
+                using (var stream = File.Create(Path.Combine(root, "wallpaper-preview.png"))) photoPng.Save(stream);
+                imageConfig.imageTransparency = 0; Call(window, "AppearanceChanged"); Pump();
+                Assert(Math.Abs(Descendants(window).OfType<Image>().First(i => i.Source != null).Opacity - 1) < .001, "fully visible wallpaper setting failed");
+                var fullPhoto = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+                fullPhoto.Render(window); var fullPhotoPng = new PngBitmapEncoder(); fullPhotoPng.Frames.Add(BitmapFrame.Create(fullPhoto));
+                using (var stream = File.Create(Path.Combine(root, "wallpaper-full-preview.png"))) fullPhotoPng.Save(stream);
+                imageConfig.imageTransparency = 37; Call(window, "AppearanceChanged"); Call(window, "SavePending");
             });
             Check("UI restart reads same profile and starts vault locked", delegate
             {
-                Call(window, "Quit"); window = new BrainWindow(directory, showMessage) { ShowActivated = false }; window.Show(); Pump(); Click("vault-tab"); Assert(Find<PasswordBox>("master-password", false) != null, "restart did not lock"); Click("notes-tab");
+                double left = window.Left, top = window.Top, width = window.Width, height = window.Height;
+                Call(window, "Quit"); window = new BrainWindow(directory, showMessage) { ShowActivated = false }; window.Show(); Pump();
+                Assert(Math.Abs(window.Left - left) < 2 && Math.Abs(window.Top - top) < 2 && Math.Abs(window.Width - width) < 2 && Math.Abs(window.Height - height) < 2, "window placement did not restore");
+                Click("vault-tab"); Assert(Find<PasswordBox>("master-password", false) != null, "restart did not lock"); Click("notes-tab");
             });
             // Produce a clean preview with synthetic records only.
             var preferences = JsonFile.Clone(new LocalStore(directory).Config); preferences.image = ""; preferences.background = "#F6F8FB"; preferences.accent = "#48648E"; preferences.shortcut = "F8";
