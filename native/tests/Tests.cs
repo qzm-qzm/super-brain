@@ -12,6 +12,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -63,6 +64,14 @@ namespace SuperBrain
                 string dir = DirectoryFor("corrupt"); File.WriteAllText(Path.Combine(dir, "notes.json"), "bad JSON"); Throws(delegate { new LocalStore(dir); }, "corrupt data accepted"); Assert(File.ReadAllText(Path.Combine(dir, "notes.json")) == "bad JSON", "corrupt file replaced");
                 Throws(delegate { new Preferences { imageTransparency = 101 }.Validate(); }, "invalid transparency"); Throws(delegate { new Preferences { shortcut = "Q" }.Validate(); }, "invalid hotkey");
                 uint a, b; Throws(delegate { Platform.Shortcut("Ctrl+Ctrl+Q", out a, out b); }, "duplicate modifier");
+                Assert(Platform.CapturedShortcut(Key.F8, ModifierKeys.None) == "F8", "single function key capture");
+                Assert(Platform.CapturedShortcut(Key.F24, ModifierKeys.None) == "F24", "highest function key capture");
+                Assert(Platform.CapturedShortcut(Key.Q, ModifierKeys.Control | ModifierKeys.Alt) == "Ctrl+Alt+Q", "modifier capture");
+                Assert(Platform.CapturedShortcut(Key.D3, ModifierKeys.Control) == "Ctrl+3", "digit capture");
+                Throws(delegate { Platform.CapturedShortcut(Key.Q, ModifierKeys.None); }, "bare letter captured");
+                Throws(delegate { Platform.CapturedShortcut(Key.F, ModifierKeys.None); }, "bare F captured");
+                Throws(delegate { Platform.CapturedShortcut(Key.Enter, ModifierKeys.Control); }, "unsupported key captured");
+                Throws(delegate { Platform.CapturedShortcut(Key.F4, ModifierKeys.Alt); }, "system close key captured");
             });
             Check("vault encrypts all metadata; restart, wrong password and immediate lock", delegate
             {
@@ -140,6 +149,52 @@ namespace SuperBrain
                 Platform.PostMessage(new WindowInteropHelper(window).Handle, showMessage, IntPtr.Zero, IntPtr.Zero); Wait(delegate { return window.IsVisible; }); Find<PasswordBox>("master-password").Password = Password; Click("unlock"); Wait(delegate { return Find<Button>("new-item", false) != null; });
                 var record = Descendants(window).OfType<Button>().First(b => AutomationProperties.GetAutomationId(b).StartsWith("record-")); record.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); Assert(Find<PasswordBox>("edit-password").Password == Secret && Find<TextBox>("edit-body").Text == "Last secret edit", "UI secret mismatch"); Click("back"); Click("notes-tab");
             });
+            Check("pressing a key captures and registers shortcut without typing text", delegate
+            {
+                var open = Find<Button>("settings");
+                window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)delegate
+                {
+                    Window dialog = app.Windows.Cast<Window>().First(w => w != window);
+                    var field = DialogControl<TextBox>(dialog, "setting-shortcut");
+                    Assert(field.IsReadOnly, "shortcut still accepts typed text");
+                    field.Focus(); Pump();
+                    Assert((string)typeof(BrainWindow).GetField("activeShortcut", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window) == null, "previous key kept intercepting capture");
+                    var key = Press(field, Key.F9);
+                    Assert(key.Handled && field.Text == "F9", "F9 was not captured");
+                    var preview = new RenderTargetBitmap((int)dialog.ActualWidth, (int)dialog.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+                    preview.Render(dialog); var screenshot = new PngBitmapEncoder(); screenshot.Frames.Add(BitmapFrame.Create(preview));
+                    using (var stream = File.Create(Path.Combine(root, "hotkey-preview.png"))) screenshot.Save(stream);
+                    DialogControl<Button>(dialog, "save-settings").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                });
+                open.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
+                Assert(new LocalStore(directory).Config.shortcut == "F9", "captured key was not saved");
+                uint mods, keyCode; Platform.Shortcut("F9", out mods, out keyCode);
+                Assert(!Platform.RegisterHotKey(new WindowInteropHelper(window).Handle, 99, mods, keyCode), "captured key is not active");
+            });
+            Check("occupied shortcut is rejected; old key is restored on cancel", delegate
+            {
+                IntPtr handle = new WindowInteropHelper(window).Handle;
+                uint mods, keyCode; Platform.Shortcut("F10", out mods, out keyCode);
+                Assert(Platform.RegisterHotKey(handle, 99, mods, keyCode), "test key already occupied");
+                try
+                {
+                    var open = Find<Button>("settings");
+                    window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)delegate
+                    {
+                        Window dialog = app.Windows.Cast<Window>().First(w => w != window);
+                        var field = DialogControl<TextBox>(dialog, "setting-shortcut"); field.Focus(); Pump(); Press(field, Key.F10);
+                        Assert(field.Text == "F10", "occupied key did not display");
+                        DialogControl<Button>(dialog, "save-settings").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
+                        Assert(DialogControl<TextBlock>(dialog, "settings-error").Text.Contains("已被占用"), "missing conflict explanation");
+                        dialog.Close();
+                    });
+                    open.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
+                    Assert(new LocalStore(directory).Config.shortcut == "F9", "conflict changed saved shortcut");
+                    Platform.Shortcut("F9", out mods, out keyCode);
+                    Assert(!Platform.RegisterHotKey(handle, 100, mods, keyCode), "previous shortcut was not restored");
+                }
+                finally { Platform.UnregisterHotKey(handle, 99); }
+            });
             Check("appearance changes persist and transparency is independent", delegate
             {
                 var imageConfig = (Preferences)typeof(BrainWindow).GetField("config", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
@@ -154,7 +209,7 @@ namespace SuperBrain
                     Descendants(dialog).OfType<Button>().First(b => AutomationProperties.GetAutomationId(b) == "appearance-done").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 });
                 openAppearance.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); var saved = new LocalStore(directory); Assert(saved.Config.image.StartsWith("data:image/png;base64,") && Descendants(window).OfType<Image>().Any(i => i.Source != null && Math.Abs(i.Opacity - .63) < .001), "background image opacity mismatch");
-                Assert(saved.Config.background == "#20242C" && saved.Config.imageTransparency == 37 && saved.Config.shortcut == "Ctrl+Alt+Shift+F24", "appearance not persisted");
+                Assert(saved.Config.background == "#20242C" && saved.Config.imageTransparency == 37 && saved.Config.shortcut == "F9", "appearance not persisted");
             });
             Check("UI restart reads same profile and starts vault locked", delegate
             {
@@ -169,6 +224,18 @@ namespace SuperBrain
         }
         static IEnumerable<DependencyObject> Descendants(DependencyObject parent) { yield return parent; for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++) foreach (var child in Descendants(VisualTreeHelper.GetChild(parent, i))) yield return child; }
         static T Find<T>(string id, bool required = true) where T : FrameworkElement { Pump(); var found = Descendants(window).OfType<T>().FirstOrDefault(e => AutomationProperties.GetAutomationId(e) == id); if (required && found == null) throw new Exception("Missing UI element: " + id); return found; }
+        static T DialogControl<T>(Window dialog, string id) where T : FrameworkElement
+        {
+            var found = Descendants(dialog).OfType<T>().FirstOrDefault(e => AutomationProperties.GetAutomationId(e) == id);
+            if (found == null) throw new Exception("Missing dialog control: " + id);
+            return found;
+        }
+        static KeyEventArgs Press(TextBox input, Key key)
+        {
+            var source = PresentationSource.FromVisual(input);
+            var args = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            input.RaiseEvent(args); Pump(); return args;
+        }
         static void Click(string id) { Find<Button>(id).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); }
         static void Call(object target, string name) { typeof(BrainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(target, null); Pump(); }
         static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, (Action)delegate { frame.Continue = false; }); Dispatcher.PushFrame(frame); }

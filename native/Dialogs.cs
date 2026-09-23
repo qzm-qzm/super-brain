@@ -90,11 +90,44 @@ namespace SuperBrain
         {
             var body = new StackPanel(); var dialog = Dialog("设置 · 超强大脑", body, 690); if (dialog == null) return;
             body.Children.Add(Text("随时呼出，随手记录。", 18, false, true));
-            var hotkey = Identify(new TextBox { Text = config.shortcut, MaxLength = 60 }, "setting-shortcut", "全局快捷键"); Field(body, "呼出 / 收起快捷键", hotkey); body.Children.Add(Text("使用 F8 这样的单键，或 Ctrl+Alt+Q 组合键。", 11, true));
+            var hotkey = Identify(new TextBox { Text = config.shortcut, MaxLength = 60, IsReadOnly = true, IsReadOnlyCaretVisible = false, Cursor = Cursors.Hand }, "setting-shortcut", "点击后按键设置全局快捷键");
+            Field(body, "呼出 / 收起快捷键", hotkey);
+            var captureHelp = Text("点击上方输入框，然后直接按想绑定的键。", 11, true); body.Children.Add(captureHelp);
             var topmost = Identify(new CheckBox { Content = "窗口始终置顶", IsChecked = config.alwaysOnTop }, "setting-topmost", "窗口始终置顶"); body.Children.Add(topmost);
             var timeout = Identify(new ComboBox { ItemsSource = new[] { 1, 5, 10, 15, 30 }, SelectedItem = config.autoLockMinutes, Padding = new Thickness(8), FontSize = 14 }, "setting-timeout", "闲置锁定分钟数"); Field(body, "闲置多少分钟后锁定密码库", timeout);
             body.Children.Add(Text("收起窗口、锁屏或休眠时也会锁定。", 11, true));
-            var error = Text("", 12); error.SetResourceReference(TextBlock.ForegroundProperty, "Danger"); body.Children.Add(error);
+            var error = Identify(Text("", 12), "settings-error", "快捷键错误提示"); error.SetResourceReference(TextBlock.ForegroundProperty, "Danger"); body.Children.Add(error);
+            Action restoreShortcut = delegate
+            {
+                if (activeShortcut == null && handle != IntPtr.Zero)
+                {
+                    try { SetShortcut(config.shortcut); }
+                    catch (Exception e) { error.Text = e.Message; }
+                }
+            };
+            hotkey.GotKeyboardFocus += delegate
+            {
+                if (activeShortcut != null && handle != IntPtr.Zero) { Platform.UnregisterHotKey(handle, hotkeyId); activeShortcut = null; }
+                captureHelp.Text = "现在按下快捷键；只按 Ctrl / Alt / Shift 时，继续按一个主键。";
+                hotkey.SelectAll();
+            };
+            hotkey.LostKeyboardFocus += delegate { restoreShortcut(); };
+            hotkey.PreviewKeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.Key == Key.Tab || e.Key == Key.Escape) return;
+                e.Handled = true;
+                Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (Platform.IsModifierKey(key)) { captureHelp.Text = "继续按一个主键，例如 Q 或 F9。"; return; }
+                if (e.IsRepeat) return;
+                try
+                {
+                    string captured = Platform.CapturedShortcut(key, Keyboard.Modifiers);
+                    hotkey.Text = captured; error.Text = "";
+                    captureHelp.Text = "已录入 " + captured + "，点击“保存设置”后生效。";
+                }
+                catch (Exception ex) { error.Text = ex.Message; }
+            };
+            dialog.Closed += delegate { restoreShortcut(); };
             body.Children.Add(Button("保存设置", "save-settings", delegate
             {
                 try
