@@ -25,7 +25,7 @@ $second = $null
 function Wait-For([scriptblock]$Predicate) {
     $watch = [Diagnostics.Stopwatch]::StartNew()
     do { $value = & $Predicate; if ($null -ne $value -and $value -ne $false) { return $value }; Start-Sleep -Milliseconds 100 } while ($watch.Elapsed.TotalSeconds -lt 15)
-    throw ('Timed out waiting for background application: ' + ((Get-PSCallStack | Select-Object -Skip 1 -First 1).ScriptLineNumber))
+    throw ('Timed out waiting for background application: ' + ((Get-PSCallStack | ForEach-Object { $_.FunctionName + ':' + $_.ScriptLineNumber }) -join ' > '))
 }
 function Child { $item = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($application.Id)" | Select-Object -First 1; if ($null -ne $item) { Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue } }
 function Find-Control([string]$Id) { $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,$Id); $script:window.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition) }
@@ -36,6 +36,8 @@ function Await-Window {
     $script:window = Wait-For { [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children,$condition) }
 }
 function Assert-Hotkey([uint32]$Key) {
+    # A registration probe must not steal the key while the host is still acquiring it.
+    $ready = Wait-For { $handle = [BrainBackgroundProbe]::FindWindow([IntPtr]::Zero,'SuperBrain.Background.'+$identity); if ($handle -ne [IntPtr]::Zero) { return $handle }; return $null }
     $owned = Wait-For {
         $available = [BrainBackgroundProbe]::RegisterHotKey([IntPtr]::Zero,991,0x4007,$Key)
         if ($available) { [BrainBackgroundProbe]::UnregisterHotKey([IntPtr]::Zero,991) | Out-Null; return $false }
@@ -96,6 +98,9 @@ try {
     $result = [pscustomobject]@{Success=$true;Checks=@('silent startup','no WPF in idle host','registered shortcut','lazy window launch','save before release','UI process exits on hide','duplicate startup stays silent','double-click reuses host','changed shortcut reload','quit stops both processes','quit during window startup');IdleWorkingSetMiB=$idle;VisibleTotalWorkingSetMiB=$visible;AfterHideWorkingSetMiB=$afterHide;IdleCpuMsOver1_2Seconds=$idleCpuMs;Profile=$profile}
     $result | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $profile 'background-result.json') -Encoding UTF8
     $result | ConvertTo-Json -Depth 3
+} catch {
+    $_ | Out-String | Set-Content -LiteralPath (Join-Path $profile 'failure.txt') -Encoding UTF8
+    throw
 } finally {
     if ($null -ne $second -and -not $second.HasExited) { Stop-Process -Id $second.Id -Force }
     if ($null -ne $ui -and -not $ui.HasExited) { Stop-Process -Id $ui.Id -Force }

@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Forms = System.Windows.Forms;
 
 namespace SuperBrain
@@ -49,12 +50,13 @@ namespace SuperBrain
                 preferences.Validate(); shortcut = preferences.shortcut;
                 uint modifiers, key; Platform.Shortcut(shortcut, out modifiers, out key);
                 registered = Platform.RegisterHotKey(listener.Handle, HotkeyId, modifiers, key);
+                listener.SetReady(registered);
                 tray.Text = "超强大脑 · " + shortcut + " 呼出";
                 if (!registered) Report("快捷键 " + shortcut + " 已被占用。单击托盘图标打开，再到设置中更换快捷键。");
             }
             catch (Exception e) { Report("后台启动遇到问题：" + e.Message + " 可单击托盘图标打开工具。"); }
         }
-        void ReleaseShortcut() { if (registered) { Platform.UnregisterHotKey(listener.Handle, HotkeyId); registered = false; } }
+        void ReleaseShortcut() { if (registered) { listener.SetReady(false); Platform.UnregisterHotKey(listener.Handle, HotkeyId); registered = false; } }
         void OpenWindow()
         {
             if (quitting || disposed) return;
@@ -113,7 +115,11 @@ namespace SuperBrain
         sealed class Listener : Forms.NativeWindow
         {
             readonly MessageHandler receive;
-            public Listener(MessageHandler receive, string name) { this.receive = receive; CreateHandle(new Forms.CreateParams { Caption = name, ExStyle = 0x80 }); }
+            readonly string name;
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool SetWindowText(IntPtr handle, string text);
+            public Listener(MessageHandler receive, string name) { this.receive = receive; this.name = name; CreateHandle(new Forms.CreateParams { ExStyle = 0x80 }); }
+            // Publish the discoverable listener name only once the shortcut is registered.
+            public void SetReady(bool ready) { SetWindowText(Handle, ready ? name : ""); }
             protected override void WndProc(ref Forms.Message message) { receive(ref message); base.WndProc(ref message); }
         }
     }
