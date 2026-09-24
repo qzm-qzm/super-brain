@@ -6,7 +6,7 @@ $compiler = Join-Path $frameworkRoot 'csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw 'Windows .NET Framework 4.8 is required.' }
 $outputPath = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-$references = @('System.dll','System.Core.dll','System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','WPF/WindowsBase.dll','WPF/PresentationCore.dll','WPF/PresentationFramework.dll','System.Xaml.dll')
+$references = @('System.dll','System.Core.dll','System.Xml.dll','System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','WPF/WindowsBase.dll','WPF/PresentationCore.dll','WPF/PresentationFramework.dll','System.Xaml.dll')
 $arguments = @('/nologo','/optimize+','/platform:x64','/codepage:65001',('/win32icon:' + (Join-Path $projectRoot 'assets/icon.ico')),('/win32manifest:' + (Join-Path $projectRoot 'native/app.manifest')))
 $arguments += $references | ForEach-Object { '/reference:' + (Join-Path $frameworkRoot $_) }
 $arguments += @(

@@ -18,29 +18,44 @@ namespace SuperBrain
             if (command.Length > 260) throw new Exception("文件路径过长，请将工具放到 D:\\super-brain 这样的较短路径。");
             return command;
         }
-        public static bool IsEnabled(string executable, string keyPath = RunKey)
+        public sealed class Snapshot
         {
+            internal string legacy, taskXml, keyPath, taskName;
+        }
+        public static Snapshot Capture(string keyPath = RunKey, string taskName = null)
+        {
+            return new Snapshot { legacy = ReadCommand(keyPath), taskXml = ScheduledStartup.ReadXml(taskName), keyPath = keyPath, taskName = taskName };
+        }
+        public static void Restore(Snapshot previous)
+        {
+            ScheduledStartup.WriteXml(previous.taskXml, previous.taskName);
+            using (var key = Registry.CurrentUser.CreateSubKey(previous.keyPath))
+                if (previous.legacy == null) key.DeleteValue(ValueName, false); else key.SetValue(ValueName, previous.legacy, RegistryValueKind.String);
+        }
+        public static bool IsEnabled(string executable, string keyPath = RunKey, string taskName = null)
+        {
+            try { if (ScheduledStartup.Matches(ScheduledStartup.ReadXml(taskName), executable, true)) return true; }
+            catch (Exception e) { if (!(e.GetBaseException() is System.Runtime.InteropServices.COMException)) throw; }
             return String.Equals(ReadCommand(keyPath), Command(executable), StringComparison.OrdinalIgnoreCase);
         }
         public static string ReadCommand(string keyPath = RunKey)
         {
             using (var key = Registry.CurrentUser.OpenSubKey(keyPath, false)) return key == null ? null : key.GetValue(ValueName) as string;
         }
-        public static void RestoreCommand(string previous, string expected, string keyPath = RunKey)
-        {
-            using (var key = Registry.CurrentUser.CreateSubKey(keyPath))
-            {
-                if (!String.Equals(key.GetValue(ValueName) as string, expected, StringComparison.OrdinalIgnoreCase)) return;
-                if (previous == null) key.DeleteValue(ValueName, false); else key.SetValue(ValueName, previous, RegistryValueKind.String);
-            }
-        }
-        public static void SetEnabled(bool enabled, string executable, string keyPath = RunKey)
+        public static void SetEnabled(bool enabled, string executable, string keyPath = RunKey, string taskName = null)
         {
             string command = Command(executable);
-            using (var key = Registry.CurrentUser.CreateSubKey(keyPath))
+            var previous = Capture(keyPath, taskName);
+            try
             {
-                if (enabled) key.SetValue(ValueName, command, RegistryValueKind.String);
-                else if (String.Equals(key.GetValue(ValueName) as string, command, StringComparison.OrdinalIgnoreCase)) key.DeleteValue(ValueName, false);
+                if (enabled) ScheduledStartup.WriteXml(ScheduledStartup.Definition(executable), taskName);
+                else if (ScheduledStartup.Matches(previous.taskXml, executable, false)) ScheduledStartup.WriteXml(null, taskName);
+                using (var key = Registry.CurrentUser.CreateSubKey(keyPath))
+                    if (enabled || String.Equals(key.GetValue(ValueName) as string, command, StringComparison.OrdinalIgnoreCase)) key.DeleteValue(ValueName, false);
+            }
+            catch
+            {
+                Restore(previous); throw;
             }
         }
     }

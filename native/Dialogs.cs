@@ -145,8 +145,8 @@ namespace SuperBrain
                 {
                     var next = JsonFile.Clone(config); next.shortcut = hotkey.Text.Trim(); next.alwaysOnTop = topmost.IsChecked == true; next.autoLockMinutes = (int)timeout.SelectedItem; next.Validate(); string oldShortcut = config.shortcut; bool changed = !String.Equals(next.shortcut, oldShortcut, StringComparison.OrdinalIgnoreCase);
                     if (changed) SetShortcut(next.shortcut);
-                    bool changeStartup = (startup.IsChecked == true) != startupEnabled;
-                    string previousStartupCommand = StartupRegistration.ReadCommand();
+                    bool changeStartup = startup.IsChecked == true || startupEnabled;
+                    var previousStartup = changeStartup ? StartupRegistration.Capture() : null;
                     try
                     {
                         if (changeStartup) StartupRegistration.SetEnabled(startup.IsChecked == true, StartupRegistration.Executable);
@@ -154,7 +154,7 @@ namespace SuperBrain
                     }
                     catch
                     {
-                        if (changeStartup) StartupRegistration.RestoreCommand(previousStartupCommand, startup.IsChecked == true ? StartupRegistration.Command(StartupRegistration.Executable) : null);
+                        if (changeStartup) StartupRegistration.Restore(previousStartup);
                         if (changed) SetShortcut(oldShortcut); throw;
                     }
                     config = next; configDirty = false; ApplyTheme(); if (tray != null) tray.Text = "超强大脑 · " + config.shortcut; dialog.Close(); Render();

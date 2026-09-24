@@ -56,27 +56,40 @@ namespace SuperBrain
         }
         static void CoreTests()
         {
-            Check("current-user startup registration quotes paths, disables and rolls back safely", delegate
+            Check("login task migrates legacy startup, runs with limited user privileges and restores safely", delegate
             {
-                string keyPath = @"Software\SuperBrainLite.Tests\" + Guid.NewGuid().ToString("N");
-                string executable = Path.Combine(root, "space and 中文", "SuperBrain.exe");
+                string suffix = Guid.NewGuid().ToString("N"), keyPath = @"Software\SuperBrainLite.Tests\" + suffix;
+                string taskName = ScheduledStartup.TaskName + "-Test-" + suffix;
+                string executable = Path.Combine(root, "space & 中文", "SuperBrain.exe");
                 try
                 {
-                    Assert(!StartupRegistration.IsEnabled(executable, keyPath), "startup enabled without registration");
-                    StartupRegistration.SetEnabled(true, executable, keyPath);
-                    Assert(StartupRegistration.ReadCommand(keyPath) == "\"" + executable + "\" --background", "unsafe startup command");
-                    Assert(StartupRegistration.IsEnabled(executable, keyPath), "startup not enabled");
-                    StartupRegistration.SetEnabled(false, Path.Combine(root, "other.exe"), keyPath);
-                    Assert(StartupRegistration.IsEnabled(executable, keyPath), "another copy removed registration");
-                    StartupRegistration.SetEnabled(false, executable, keyPath);
-                    Assert(!StartupRegistration.IsEnabled(executable, keyPath), "startup not disabled");
-                    StartupRegistration.SetEnabled(true, executable, keyPath);
-                    string previous = StartupRegistration.ReadCommand(keyPath), newer = Path.Combine(root, "newer.exe");
-                    StartupRegistration.SetEnabled(true, newer, keyPath);
-                    StartupRegistration.RestoreCommand(previous, StartupRegistration.Command(newer), keyPath);
-                    Assert(StartupRegistration.IsEnabled(executable, keyPath), "rollback lost original startup path");
+                    Assert(!StartupRegistration.IsEnabled(executable, keyPath, taskName), "unexpected startup state");
+                    using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(keyPath)) key.SetValue(StartupRegistration.ValueName, StartupRegistration.Command(executable));
+                    var original = StartupRegistration.Capture(keyPath, taskName);
+                    Assert(StartupRegistration.IsEnabled(executable, keyPath, taskName), "legacy startup not recognized");
+                    StartupRegistration.SetEnabled(true, executable, keyPath, taskName);
+                    Assert(StartupRegistration.IsEnabled(executable, keyPath, taskName) && StartupRegistration.ReadCommand(keyPath) == null, "migration did not replace the Run entry");
+                    var document = new System.Xml.XmlDocument(); document.LoadXml(ScheduledStartup.ReadXml(taskName));
+                    File.WriteAllText(Path.Combine(root, "startup-task.xml"), document.OuterXml);
+                    var ns = new System.Xml.XmlNamespaceManager(document.NameTable); ns.AddNamespace("t", ScheduledStartup.Schema);
+                    Func<string, string> value = delegate(string path) { var node = document.SelectSingleNode("/t:Task/" + path, ns); return node == null ? null : node.InnerText; };
+                    Assert(value("t:Principals/t:Principal/t:LogonType") == "InteractiveToken" && (value("t:Principals/t:Principal/t:RunLevel") == null || value("t:Principals/t:Principal/t:RunLevel") == "LeastPrivilege"), "startup could run outside the user desktop or with elevation");
+                    string triggerUser = value("t:Triggers/t:LogonTrigger/t:UserId");
+                    string triggerSid = triggerUser.StartsWith("S-1-") ? triggerUser : ((System.Security.Principal.SecurityIdentifier)new System.Security.Principal.NTAccount(triggerUser).Translate(typeof(System.Security.Principal.SecurityIdentifier))).Value;
+                    Assert(triggerSid == ScheduledStartup.UserSid, "login trigger is not scoped to the current user");
+                    Assert(value("t:Settings/t:ExecutionTimeLimit") == "PT0S" && value("t:Settings/t:DisallowStartIfOnBatteries") == "false" && value("t:Settings/t:StopIfGoingOnBatteries") == "false", "startup may stop on battery or time limit");
+                    Assert(value("t:Actions/t:Exec/t:WorkingDirectory") == Path.GetDirectoryName(executable), "wrong startup working directory");
+                    StartupRegistration.SetEnabled(false, Path.Combine(root, "other.exe"), keyPath, taskName);
+                    Assert(StartupRegistration.IsEnabled(executable, keyPath, taskName), "another copy removed the login task");
+                    var migrated = StartupRegistration.Capture(keyPath, taskName);
+                    StartupRegistration.SetEnabled(false, executable, keyPath, taskName);
+                    Assert(!StartupRegistration.IsEnabled(executable, keyPath, taskName) && ScheduledStartup.ReadXml(taskName) == null, "disabled task was retained");
+                    StartupRegistration.Restore(migrated);
+                    Assert(StartupRegistration.IsEnabled(executable, keyPath, taskName), "task rollback failed");
+                    StartupRegistration.Restore(original);
+                    Assert(StartupRegistration.ReadCommand(keyPath) == StartupRegistration.Command(executable) && ScheduledStartup.ReadXml(taskName) == null, "migration rollback lost the old startup entry");
                 }
-                finally { Microsoft.Win32.Registry.CurrentUser.DeleteSubKey(keyPath, false); }
+                finally { ScheduledStartup.WriteXml(null, taskName); Microsoft.Win32.Registry.CurrentUser.DeleteSubKey(keyPath, false); }
             });
             Check("native PBKDF2 matches .NET reference including Unicode", delegate
             {

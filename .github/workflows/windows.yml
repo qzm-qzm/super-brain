@@ -56,6 +56,7 @@ jobs:
             test-results/**/failure.txt
             test-results/**/result.json
             test-results/**/background-result.json
+            test-results/**/startup-task.xml
             test-results/**/preview.png
           if-no-files-found: ignore
           retention-days: 7
@@ -83,12 +84,12 @@ jobs:
           超强大脑 $env:APP_VERSION · Windows 轻量版
 
           下载 zip 后解压，双击「超强大脑.exe」。也可直接下载单文件 SuperBrain.exe。
-          无需安装，运行文件约 122 KB，不再捆绑 Electron。需要 Windows 10/11 x64 和 .NET Framework 4.8+。
+          无需安装，运行文件约 129 KB，不再捆绑 Electron。需要 Windows 10/11 x64 和 .NET Framework 4.8+。
           默认 F8 呼出 / 收起，配置、备忘录和加密密码库放在旁边的 data 文件夹。
           要更换快捷键，在设置中点击快捷键框，直接按键录入并保存。
           按住窗口顶部标题可拖动；背景图下的记录和按钮仍保留清晰底色。
-          本版取消主密码至少 12 字符的限制，允许自行设置非空的短密码。
-          已有密码先用原密码解锁，再到“设置 → 修改主密码”更换；不会自动改动现有密码。
+          本版修复登录后快捷键不可用：自启动改用当前用户的 Windows 登录任务。
+          任务在当前用户桌面运行，不要求空闲或外接电源；保留低内存后台、短主密码和现有资料。
           在设置中勾选“登录 Windows 后后台启动”，登录后直接按快捷键呼出。
           后台只保留快捷键和托盘；收起时保存、锁定密码库并释放窗口进程，降低待命内存。
           更新时退出后替换运行文件，保留 data。主密码不能找回，普通备忘录为明文。
